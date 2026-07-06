@@ -24,20 +24,20 @@ A. 目標:
 PLC回傳: Y0 ~ Y17
 02 35 35 38 34 03 43 33
 回傳值需轉成ASCII code，
-第一個數值代表Y4~Y7。例如: 35，代表ASCII code: 5。表示Y4:ON和Y6:ON。
-第二個數值代表Y0~Y3。例如: 35，代表ASCII code: 5。表示Y0:ON和Y2:ON。
-第三個數值代表Y14~Y17。例如: 38，代表ASCII code: 8。表示Y17:ON。
-第四個數值代表Y10~Y13。例如: 34，代表ASCII code: 4。表示Y12:ON。
+第一個數值代表Y4 ~ Y7。例如: 35，代表ASCII code: 5。表示Y4:ON和Y6:ON。
+第二個數值代表Y0 ~ Y3。例如: 35，代表ASCII code: 5。表示Y0:ON和Y2:ON。
+第三個數值代表Y14 ~ Y17。例如: 38，代表ASCII code: 8。表示Y17:ON。
+第四個數值代表Y10 ~ Y13。例如: 34，代表ASCII code: 4。表示Y12:ON。
 
 讀取X0 ~ X17
 02 30 30 30 38 30 30 32 03 35 44
 PLC回傳: X0 ~ X17
 02 35 35 38 34 03 43 33
 回傳值需轉成ASCII code，
-第一個數值代表X4~X7。例如: 35，代表ASCII code: 5。表示X4:ON和X6:ON。
-第二個數值代表X0~X3。例如: 35，代表ASCII code: 5。表示X0:ON和X2:ON。
-第三個數值代表X14~X17。例如: 38，代表ASCII code: 8。表示X17:ON。
-第四個數值代表X10~X13。例如: 34，代表ASCII code: 4。表示X12:ON。
+第一個數值代表X4 ~ X7。例如: 35，代表ASCII code: 5。表示X4:ON和X6:ON。
+第二個數值代表X0 ~ X3。例如: 35，代表ASCII code: 5。表示X0:ON和X2:ON。
+第三個數值代表X14 ~ X17。例如: 38，代表ASCII code: 8。表示X17:ON。
+第四個數值代表X10 ~ X13。例如: 34，代表ASCII code: 4。表示X12:ON。
 
 
 強制Y接點的ON/OFF
