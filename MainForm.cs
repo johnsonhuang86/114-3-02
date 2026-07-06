@@ -41,6 +41,9 @@ namespace fx3u
             AdjustComboBoxWidth(cmbQuestions);
 
             // 依顯示的文字修正按鈕寬度
+            AdjustButtonWidth(btnConnect);
+            AdjustButtonWidth(btnDisconnect);
+            AdjustButtonWidth(btnStartFlow);
             AdjustButtonWidth(btnRunSequence);
             AdjustButtonWidth(btnStandby);
             AdjustButtonWidth(btnSingleJob);
@@ -310,15 +313,20 @@ namespace fx3u
                 btnConnect.Enabled = false;
                 btnDisconnect.Enabled = true;
                 cmbPorts.Enabled = false;
+                cmbQuestions.Enabled = false; // 鎖定題目
 
                 // 開啟定時輪詢
                 pollTimer.Start();
                 btnStartFlow.Enabled = true;
                 btnRunSequence.Enabled = true;
-                btnStandby.Enabled = true;
-                btnSingleJob.Enabled = true;
-                btnFlipOnly.Enabled = true;
-                btnContinuousJob.Enabled = true;
+
+                // 復歸、單一作業、指定作業、連續作業為第2題專用
+                bool isQ2 = (cmbQuestions.SelectedIndex == 2); // 第2題在 Index 2
+                btnStandby.Enabled = isQ2;
+                btnSingleJob.Enabled = isQ2;
+                btnFlipOnly.Enabled = isQ2;
+                btnContinuousJob.Enabled = isQ2;
+
                 AppendLog("INFO", "連線建立成功，開始輪詢狀態。");
             }
             catch (Exception ex)
@@ -355,6 +363,7 @@ namespace fx3u
             btnConnect.Enabled = true;
             btnDisconnect.Enabled = false;
             cmbPorts.Enabled = true;
+            cmbQuestions.Enabled = true; // 解鎖題目
             lblPollTime.Text = "輪詢時間: - ms";
 
             // 重置所有燈號狀態為 OFF
@@ -423,6 +432,37 @@ namespace fx3u
                 {
                     pnlGL.Tag = yStates[15];
                     pnlGL.Invalidate();
+                }
+
+                // 第 2 題 Y17 (待機綠燈) 狀態動態邏輯判定：
+                // 條件: (Y0~Y10皆為off) AND (X5 off) AND (X1、X3、X4皆on) AND (X6 OR X7為on)
+                if (cmbQuestions.SelectedIndex == 2 && btnRunSequence.Enabled)
+                {
+                    bool condY0_10Off = true;
+                    for (int j = 0; j <= 8; j++) // Coil 0~8 對應 Y0~Y7, Y10
+                    {
+                        if (yStates[j])
+                        {
+                            condY0_10Off = false;
+                            break;
+                        }
+                    }
+                    bool condX5Off = !xStates[5];
+                    bool condX134On = xStates[1] && xStates[3] && xStates[4];
+                    bool condX67On = xStates[6] || xStates[7];
+
+                    bool targetY17 = condY0_10Off && condX5Off && condX134On && condX67On;
+
+                    if (yStates[15] != targetY17)
+                    {
+                        await Task.Run(() => _comm.ForceCoil(15, targetY17));
+                        yStates[15] = targetY17;
+                        _yLeds[15].Tag = targetY17;
+                        _yLeds[15].Invalidate();
+                        pnlGL.Tag = targetY17;
+                        pnlGL.Invalidate();
+                        AppendLog("INFO", $"第2題待機聯鎖改變，自動設定 Y17 待機綠燈為 {(targetY17 ? "ON" : "OFF")}。");
+                    }
                 }
 
                 watch.Stop();
@@ -1236,12 +1276,14 @@ Y17 綠待機"
                 if (_comm != null && _comm.IsOpen)
                 {
                     btnRunSequence.Enabled = true;
-                    btnStandby.Enabled = true;
-                    btnSingleJob.Enabled = true;
-                    btnFlipOnly.Enabled = true;
-                    btnContinuousJob.Enabled = true;
                     btnStartFlow.Enabled = true;
                     txtSequence.Enabled = true;
+
+                    bool isQ2 = (cmbQuestions.SelectedIndex == 2);
+                    btnStandby.Enabled = isQ2;
+                    btnSingleJob.Enabled = isQ2;
+                    btnFlipOnly.Enabled = isQ2;
+                    btnContinuousJob.Enabled = isQ2;
                 }
             }
         }
@@ -1268,11 +1310,44 @@ Y17 綠待機"
             btnStartFlow.Enabled = false;
             txtSequence.Enabled = false;
             AppendLog("INFO", "=== 開始執行待機復歸流程 ===");
+            CancellationTokenSource y16BlinkCts = null;
 
             try
             {
-                // 1. Y2 off 到 X3 on
-                AppendLog("INFO", "待機步驟 [1/8]: Y2 off...");
+                // 啟動 Y16 (YL 黃燈) 背景閃爍 (每秒一次 on off)
+                AppendLog("INFO", "啟動 Y16 運轉黃燈閃爍服務...");
+                y16BlinkCts = new CancellationTokenSource();
+                CancellationToken token = y16BlinkCts.Token;
+                _ = Task.Run(async () => {
+                    try
+                    {
+                        bool y16State = true;
+                        while (!token.IsCancellationRequested)
+                        {
+                            _comm.ForceCoil(14, y16State); // Y16
+                            y16State = !y16State;
+                            await Task.Delay(500, token);
+                        }
+                    }
+                    catch (TaskCanceledException) { }
+                    catch (Exception ex)
+                    {
+                        AppendLog("ERROR", $"Y16 復歸黃燈閃爍服務出錯: {ex.Message}");
+                    }
+                }, token);
+
+                // 1. 所有 Y 接點先 off 0.5 秒
+                AppendLog("INFO", "復歸步驟 [1/9]: 所有 Y 接點先 off 0.5 秒...");
+                await Task.Run(() => {
+                    for (int i = 0; i < 16; i++)
+                    {
+                        _comm.ForceCoil(i, false);
+                    }
+                });
+                await Task.Delay(500);
+
+                // 2. Y2 off 到 X3 on
+                AppendLog("INFO", "復歸步驟 [2/9]: Y2 off...");
                 await Task.Run(() => _comm.ForceCoil(2, false));
                 AppendLog("INFO", "等待極限開關 X3(b0) 為 true...");
                 if (!await WaitForInputStateAsync(3, true, 15))
@@ -1280,12 +1355,12 @@ Y17 綠待機"
                     throw new Exception("等待 X3(b0) 逾時！");
                 }
 
-                // 2. T1 (暫停 1 秒)
-                AppendLog("INFO", "待機步驟 [2/8]: 暫停 1 秒...");
+                // 3. T1 (暫停 1 秒)
+                AppendLog("INFO", "復歸步驟 [3/9]: 暫停 1 秒...");
                 await Task.Delay(1000);
 
-                // 3. Y0 on 直到 X0 on
-                AppendLog("INFO", "待機步驟 [3/8]: Y0 on (A+)...");
+                // 4. Y0 on 直到 X0 on
+                AppendLog("INFO", "復歸步驟 [4/9]: Y0 on (A+)...");
                 await Task.Run(() => {
                     _comm.ForceCoil(0, true);
                     _comm.ForceCoil(1, false);
@@ -1297,8 +1372,8 @@ Y17 綠待機"
                 }
                 await Task.Run(() => _comm.ForceCoil(0, false));
 
-                // 4. Y6 on 直到 X6 on
-                AppendLog("INFO", "待機步驟 [4/8]: Y6 on...");
+                // 5. Y6 on 直到 X6 on
+                AppendLog("INFO", "復歸步驟 [5/9]: Y6 on...");
                 await Task.Run(() => {
                     _comm.ForceCoil(6, true);
                     _comm.ForceCoil(5, false); // 常規防雙控衝突
@@ -1310,12 +1385,12 @@ Y17 綠待機"
                 }
                 await Task.Run(() => _comm.ForceCoil(6, false));
 
-                // 5. T1 (暫停 1 秒)
-                AppendLog("INFO", "待機步驟 [5/8]: 暫停 1 秒...");
+                // 6. T1 (暫停 1 秒)
+                AppendLog("INFO", "復歸步驟 [6/9]: 暫停 1 秒...");
                 await Task.Delay(1000);
 
-                // 6. Y1 on 直到 X1 on
-                AppendLog("INFO", "待機步驟 [6/8]: Y1 on (A-)...");
+                // 7. Y1 on 直到 X1 on
+                AppendLog("INFO", "復歸步驟 [7/9]: Y1 on (A-)...");
                 await Task.Run(() => {
                     _comm.ForceCoil(1, true);
                     _comm.ForceCoil(0, false);
@@ -1327,8 +1402,8 @@ Y17 綠待機"
                 }
                 await Task.Run(() => _comm.ForceCoil(1, false));
 
-                // 7. Y4 on 直到 X4 on
-                AppendLog("INFO", "待機步驟 [7/8]: Y4 on (C-)...");
+                // 8. Y4 on 直到 X4 on
+                AppendLog("INFO", "復歸步驟 [8/9]: Y4 on (C-)...");
                 await Task.Run(() => {
                     _comm.ForceCoil(4, true);
                     _comm.ForceCoil(3, false);
@@ -1340,8 +1415,8 @@ Y17 綠待機"
                 }
                 await Task.Run(() => _comm.ForceCoil(4, false));
 
-                // 8. Y10 on 直到 ps1 off
-                AppendLog("INFO", "待機步驟 [8/8]: Y10 on (D-)...");
+                // 9. Y10 on 直到 ps1 off
+                AppendLog("INFO", "復歸步驟 [9/9]: Y10 on (D-)...");
                 await Task.Run(() => {
                     _comm.ForceCoil(8, true); // Y10
                     _comm.ForceCoil(5, false); // Y5
@@ -1353,20 +1428,30 @@ Y17 綠待機"
                 }
                 await Task.Run(() => _comm.ForceCoil(8, false));
 
-                // 設定 Y17 (GL 綠燈) 為 ON 恆亮，作為單一作業的執行前提
-                await Task.Run(() => {
-                    _comm.ForceCoil(15, true);  // Y17 (GL)
-                    _comm.ForceCoil(13, false); // Y15 (RL)
-                    _comm.ForceCoil(14, false); // Y16 (YL)
-                });
+                // 順利完成，停止 Y16 閃爍並確保熄滅
+                if (y16BlinkCts != null)
+                {
+                    y16BlinkCts.Cancel();
+                    y16BlinkCts.Dispose();
+                    y16BlinkCts = null;
+                }
+                await Task.Run(() => _comm.ForceCoil(14, false)); // Y16 off
 
-                AppendLog("INFO", "=== 待機復歸流程成功完成，綠燈待機 (Y17) 已點亮 ===");
-                MessageBox.Show("機構已成功回到機械原點 (已進入待機狀態)！", "待機復歸成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                // 待機綠燈 (Y17) 由定時輪詢 pollTimer_Tick 動態運算前提條件並點亮。
+                AppendLog("INFO", "=== 待機復歸流程成功完成，已進入待機監控狀態 ===");
+                MessageBox.Show("機構已成功回到機械原點 (已進入待機狀態)！", "復歸成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
                 AppendLog("ERROR", $"待機復歸中斷: {ex.Message}");
-                MessageBox.Show($"待機復歸執行失敗：\n{ex.Message}", "待機復歸中斷", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"待機復歸執行失敗：\n{ex.Message}", "復歸中斷", MessageBoxButtons.OK, MessageBoxIcon.Error);
+
+                if (y16BlinkCts != null)
+                {
+                    y16BlinkCts.Cancel();
+                    y16BlinkCts.Dispose();
+                    y16BlinkCts = null;
+                }
 
                 // 安全機制：發生錯誤時，強制將所有相關的輸出關閉
                 try
@@ -1381,22 +1466,31 @@ Y17 綠待機"
                         _comm.ForceCoil(5, false);
                         _comm.ForceCoil(6, false);
                         _comm.ForceCoil(8, false);
+                        _comm.ForceCoil(14, false); // Y16 off
                     });
                 }
                 catch { }
             }
             finally
             {
+                if (y16BlinkCts != null)
+                {
+                    y16BlinkCts.Cancel();
+                    y16BlinkCts.Dispose();
+                }
+
                 // 恢復 UI 按鈕狀態
                 if (_comm != null && _comm.IsOpen)
                 {
                     btnRunSequence.Enabled = true;
-                    btnStandby.Enabled = true;
-                    btnSingleJob.Enabled = true;
-                    btnFlipOnly.Enabled = true;
-                    btnContinuousJob.Enabled = true;
                     btnStartFlow.Enabled = true;
                     txtSequence.Enabled = true;
+
+                    bool isQ2 = (cmbQuestions.SelectedIndex == 2);
+                    btnStandby.Enabled = isQ2;
+                    btnSingleJob.Enabled = isQ2;
+                    btnFlipOnly.Enabled = isQ2;
+                    btnContinuousJob.Enabled = isQ2;
                 }
             }
         }
@@ -1412,7 +1506,7 @@ Y17 綠待機"
             bool isY17On = pnlGL.Tag != null && (bool)pnlGL.Tag;
             if (!isY17On)
             {
-                MessageBox.Show("無法執行單一作業！\n前提條件：必須在綠燈待機 (Y17 為 ON) 狀態下才能執行！\n請先按下「待機」按鈕使機構復歸。", "前提條件不符", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("無法執行單一作業！\n前提條件：必須在綠燈待機 (Y17 為 ON) 狀態下才能執行！\n請先按下「復歸」按鈕使機構復歸。", "前提條件不符", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -1521,7 +1615,6 @@ Y17 綠待機"
                     // 2-1. Y2 off (B-)
                     AppendLog("INFO", "翻轉 [1/5]: Y2 off...");
                     await Task.Run(() => _comm.ForceCoil(2, false));
-                    // 雖然使用者沒有說這步要等，但按常理 B- 復歸要等到 b0 (X3 on)
                     AppendLog("INFO", "等待 B缸退回到 X3(b0) 為 true...");
                     if (!await WaitForInputStateAsync(3, true, 15))
                     {
@@ -1686,7 +1779,7 @@ Y17 綠待機"
                 }
                 await Task.Run(() => _comm.ForceCoil(8, false));
 
-                // 5. 結束 Y15 背景閃爍 (如果有啟用)
+                // 5. 結束 Y15 背景閃爍
                 if (blinkCts != null)
                 {
                     blinkCts.Cancel();
@@ -1749,12 +1842,14 @@ Y17 綠待機"
                 if (_comm != null && _comm.IsOpen)
                 {
                     btnRunSequence.Enabled = true;
-                    btnStandby.Enabled = true;
-                    btnSingleJob.Enabled = true;
-                    btnFlipOnly.Enabled = true;
-                    btnContinuousJob.Enabled = true;
                     btnStartFlow.Enabled = true;
                     txtSequence.Enabled = true;
+
+                    bool isQ2 = (cmbQuestions.SelectedIndex == 2);
+                    btnStandby.Enabled = isQ2;
+                    btnSingleJob.Enabled = isQ2;
+                    btnFlipOnly.Enabled = isQ2;
+                    btnContinuousJob.Enabled = isQ2;
                 }
             }
         }
@@ -1772,13 +1867,13 @@ Y17 綠待機"
 
             if (!isY17On || !isX10On)
             {
-                MessageBox.Show("無法執行指定翻轉！\n前提條件：必須在綠燈待機 (Y17 為 ON) 且有進料 (X10 為 ON) 狀態下才能執行！", "前提條件不符", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("無法執行指定作業！\n前提條件：必須在綠燈待機 (Y17 為 ON) 且有進料 (X10 為 ON) 狀態下才能執行！", "前提條件不符", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
             if (_comm == null || !_comm.IsOpen)
             {
-                MessageBox.Show("請先連線 PLC 才能執行指定翻轉！", "未連線", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("請先連線 PLC 才能執行指定作業！", "未連線", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -1791,13 +1886,13 @@ Y17 綠待機"
             btnStartFlow.Enabled = false;
             txtSequence.Enabled = false;
 
-            AppendLog("INFO", "=== 開始執行指定翻轉流程 ===");
+            AppendLog("INFO", "=== 開始執行指定作業流程 ===");
             CancellationTokenSource blinkCts = null;
 
             try
             {
                 // Y17 off, Y15 開始閃爍 (每秒一次 on/off)
-                AppendLog("INFO", "指定翻轉 [1/9]: 熄滅待機綠燈 (Y17)，啟動運轉紅燈 (Y15) 閃爍服務...");
+                AppendLog("INFO", "指定作業 [1/9]: 熄滅待機綠燈 (Y17)，啟動運轉紅燈 (Y15) 閃爍服務...");
                 await Task.Run(() => _comm.ForceCoil(15, false));
 
                 blinkCts = new CancellationTokenSource();
@@ -1816,12 +1911,12 @@ Y17 綠待機"
                     catch (TaskCanceledException) { }
                     catch (Exception ex)
                     {
-                        AppendLog("ERROR", $"指定翻轉紅燈閃爍出錯: {ex.Message}");
+                        AppendLog("ERROR", $"指定作業紅燈閃爍出錯: {ex.Message}");
                     }
                 }, token);
 
                 // Y2 off (B-), 等待退回 X3
-                AppendLog("INFO", "指定翻轉 [2/9]: Y2 off...");
+                AppendLog("INFO", "指定作業 [2/9]: Y2 off...");
                 await Task.Run(() => _comm.ForceCoil(2, false));
                 AppendLog("INFO", "等待 B缸退回到 X3(b0) 為 true...");
                 if (!await WaitForInputStateAsync(3, true, 15))
@@ -1830,7 +1925,7 @@ Y17 綠待機"
                 }
 
                 // Y3 on (C+) 直到 X4 off
-                AppendLog("INFO", "指定翻轉 [3/9]: Y3 on (C+)...");
+                AppendLog("INFO", "指定作業 [3/9]: Y3 on (C+)...");
                 await Task.Run(() => {
                     _comm.ForceCoil(3, true);
                     _comm.ForceCoil(4, false);
@@ -1843,11 +1938,11 @@ Y17 綠待機"
                 await Task.Run(() => _comm.ForceCoil(3, false));
 
                 // T1 (暫停 1 秒)
-                AppendLog("INFO", "指定翻轉 [4/9]: 暫停 1 秒...");
+                AppendLog("INFO", "指定作業 [4/9]: 暫停 1 秒...");
                 await Task.Delay(1000);
 
                 // Y0 on (A+) 直到 X0 on
-                AppendLog("INFO", "指定翻轉 [5/9]: Y0 on (A+)...");
+                AppendLog("INFO", "指定作業 [5/9]: Y0 on (A+)...");
                 await Task.Run(() => {
                     _comm.ForceCoil(0, true);
                     _comm.ForceCoil(1, false);

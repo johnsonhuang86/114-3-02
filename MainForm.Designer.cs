@@ -225,7 +225,7 @@ namespace fx3u
             this.btnConnect.Name = "btnConnect";
             this.btnConnect.Size = new System.Drawing.Size(80, 26);
             this.btnConnect.TabIndex = 2;
-            this.btnConnect.Text = "進行連線";
+            this.btnConnect.Text = "PLC連線";
             this.btnConnect.UseVisualStyleBackColor = false;
             this.btnConnect.Click += new System.EventHandler(this.btnConnect_Click);
             // 
@@ -398,7 +398,7 @@ namespace fx3u
             this.btnStandby.Name = "btnStandby";
             this.btnStandby.Size = new System.Drawing.Size(80, 26);
             this.btnStandby.TabIndex = 16;
-            this.btnStandby.Text = "待機";
+            this.btnStandby.Text = "復歸";
             this.btnStandby.UseVisualStyleBackColor = false;
             this.btnStandby.Click += new System.EventHandler(this.btnStandby_Click);
             // 
@@ -434,7 +434,7 @@ namespace fx3u
             this.btnFlipOnly.Name = "btnFlipOnly";
             this.btnFlipOnly.Size = new System.Drawing.Size(80, 26);
             this.btnFlipOnly.TabIndex = 18;
-            this.btnFlipOnly.Text = "指定翻轉";
+            this.btnFlipOnly.Text = "指定作業";
             this.btnFlipOnly.UseVisualStyleBackColor = false;
             this.btnFlipOnly.Click += new System.EventHandler(this.btnFlipOnly_Click);
             // 
