@@ -5,7 +5,7 @@
 
 A. 目標: 
 1. 建立C#程式專案-Windows Forms App (.NET framework)。
-   使用工具是visual stdio2026。專案檔名fx3u.slnx。
+   使用工具是visual studio2026。專案檔名fx3u.slnx。
 2. 建立一個介面，監控三菱PLC FX3U。
 
 功能:
