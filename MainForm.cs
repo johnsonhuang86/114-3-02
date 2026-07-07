@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.IO.Ports;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -17,6 +19,14 @@ namespace fx3u
         private Label[] _xLabels = new Label[16];
         private Label[] _yLabels = new Label[16];
         private bool _isPolling = false;
+        private bool _isConnectionNormal = false;
+
+        private readonly Color _colorStartFlowBack = Color.FromArgb(94, 92, 230);
+        private readonly Color _colorRunSequenceBack = Color.FromArgb(52, 199, 89);
+        private readonly Color _colorStandbyBack = Color.FromArgb(255, 159, 10);
+        private readonly Color _colorSingleJobBack = Color.FromArgb(175, 82, 222);
+        private readonly Color _colorFlipOnlyBack = Color.FromArgb(255, 45, 85);
+        private readonly Color _colorContinuousJobBack = Color.FromArgb(48, 176, 199);
 
         public MainForm()
         {
@@ -29,7 +39,7 @@ namespace fx3u
             RefreshComPorts();
             
             // 初始化題目選擇選單
-            cmbQuestions.Items.Add("請選擇題目 (預設)...");
+            cmbQuestions.Items.Add("請選擇題目...");
             cmbQuestions.Items.Add("第 1 題 (機電丙一)");
             cmbQuestions.Items.Add("第 2 題 (機電丙二)");
             cmbQuestions.Items.Add("第 3 題 (機電丙三)");
@@ -50,7 +60,11 @@ namespace fx3u
             AdjustButtonWidth(btnFlipOnly);
             AdjustButtonWidth(btnContinuousJob);
 
-            AppendLog("INFO", "程式啟動。請選擇通訊埠並點擊「進行連線」開始監控。");
+            // 初始將按鈕視覺設為灰色停用
+            UpdateButtonsVisualState(false);
+            SetControlsEnabled(false);
+
+            AppendLog("INFO", "程式啟動。請選擇通訊埠與題目，並點擊「PLC連線」開始監控。");
         }
 
         private void AdjustButtonWidth(Button btn)
@@ -79,7 +93,7 @@ namespace fx3u
                 cmbPorts.Items.Add("COM1");
                 cmbPorts.Items.Add("COM2");
                 cmbPorts.SelectedIndex = 0;
-                AppendLog("WARNING", "系統未偵測到任何實體 COM Port。已載入模擬埠。");
+                AppendLog("WARNING", "系統未偵測到任何實體 COM Port。已載入模擬虛擬埠。");
             }
 
             // 依最寬項目自動調整 ComboBox 寬度
@@ -88,8 +102,10 @@ namespace fx3u
 
         private void InitializeCustomUI()
         {
+            tblX.Controls.Clear();
+            tblY.Controls.Clear();
+
             // 動態配置 X0~X7 與 X10~X17 控制項到 tblX (2列8行)
-            // 第一欄：X0~X7，第二欄：X10~X17
             for (int row = 0; row < 8; row++)
             {
                 // X0~X7 (左半欄)
@@ -106,16 +122,15 @@ namespace fx3u
             }
 
             // 動態配置 Y0~Y7 與 Y10~Y17 控制項到 tblY (2列8行)
-            // 第一欄：Y0~Y7，第二欄：Y10~Y17
             for (int row = 0; row < 8; row++)
             {
-                // Y0~Y7
+                // Y0~Y7 (左半欄)
                 int indexLeft = row;
                 string octalLeft = indexLeft.ToString();
                 var pnlLeft = CreateLedItemPanel("Y" + octalLeft, indexLeft, true);
                 tblY.Controls.Add(pnlLeft, 0, row);
 
-                // Y10~Y17
+                // Y10~Y17 (右半欄)
                 int indexRight = row + 8;
                 string octalRight = (row + 10).ToString();
                 var pnlRight = CreateLedItemPanel("Y" + octalRight, indexRight, true);
@@ -132,7 +147,6 @@ namespace fx3u
                 BackColor = Color.FromArgb(44, 44, 46)
             };
 
-            // 使用微型 TableLayoutPanel 實現自適應縮放與居中排版
             TableLayoutPanel layout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -143,16 +157,15 @@ namespace fx3u
                 Padding = new Padding(0)
             };
 
-            // 設定欄寬比例或絕對值
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 35F)); // LED 燈號欄 (固定 35 像素)
             if (isY)
             {
-                layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F)); // 名稱欄 (佔用剩餘比例)
+                layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F)); // 名稱欄 (自適應)
                 layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 75F));  // 按鈕欄 (固定 75 像素)
             }
             else
             {
-                layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F)); // 名稱欄 (佔用剩餘比例)
+                layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F)); // 名稱欄 (自適應)
             }
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
@@ -160,7 +173,7 @@ namespace fx3u
             Panel ledPanel = new Panel
             {
                 Size = new Size(18, 18),
-                Anchor = AnchorStyles.None, // 垂直與水平自動置中
+                Anchor = AnchorStyles.None,
                 Tag = false
             };
             ledPanel.Paint += LedPanel_Paint;
@@ -178,7 +191,7 @@ namespace fx3u
             Label nameLabel = new Label
             {
                 Text = name,
-                Anchor = AnchorStyles.Left, // 靠左垂直置中
+                Anchor = AnchorStyles.Left,
                 ForeColor = Color.FromArgb(242, 242, 247),
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
                 AutoSize = true,
@@ -197,14 +210,14 @@ namespace fx3u
             layout.Controls.Add(ledPanel, 0, 0);
             layout.Controls.Add(nameLabel, 1, 0);
 
-            // 如果是 Y，需要加上控制按鈕
+            // 如果是 Y，加上強制 ON/OFF 的切換按鈕
             if (isY)
             {
                 Button btn = new Button
                 {
                     Text = "切換",
                     Size = new Size(65, 24),
-                    Anchor = AnchorStyles.Right, // 靠右垂直置中
+                    Anchor = AnchorStyles.Right,
                     FlatStyle = FlatStyle.Flat,
                     BackColor = Color.FromArgb(58, 58, 60),
                     ForeColor = Color.White,
@@ -232,7 +245,6 @@ namespace fx3u
 
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
 
-            // 決定燈號的主體色彩
             Color ledColor;
             Color lightBorderColor;
             Color lightGradientColor;
@@ -241,19 +253,19 @@ namespace fx3u
             {
                 if (p.Name == "pnlRL")
                 {
-                    ledColor = Color.FromArgb(255, 69, 58); // 紅
+                    ledColor = Color.FromArgb(255, 69, 58); // 紅色燈
                     lightGradientColor = Color.FromArgb(255, 140, 130);
                     lightBorderColor = Color.FromArgb(255, 180, 180);
                 }
                 else if (p.Name == "pnlYL")
                 {
-                    ledColor = Color.FromArgb(255, 214, 10); // 黃
+                    ledColor = Color.FromArgb(255, 214, 10); // 黃色燈
                     lightGradientColor = Color.FromArgb(255, 240, 150);
                     lightBorderColor = Color.FromArgb(255, 240, 180);
                 }
                 else
                 {
-                    // 預設為綠色
+                    // 預設為綠色燈 (X/Y 點位與 GL 綠燈)
                     ledColor = Color.FromArgb(48, 209, 88); 
                     lightGradientColor = Color.FromArgb(140, 255, 170);
                     lightBorderColor = Color.FromArgb(140, 255, 170);
@@ -277,7 +289,7 @@ namespace fx3u
                 e.Graphics.FillEllipse(brush, 1, 1, p.Width - 3, p.Height - 3);
             }
 
-            // 繪製高質感白光反射點
+            // 繪製反射高光點
             if (isOn)
             {
                 using (var highlightBrush = new SolidBrush(Color.FromArgb(180, Color.White)))
@@ -286,7 +298,7 @@ namespace fx3u
                 }
             }
 
-            // 繪製外圈邊框
+            // 繪製邊框
             using (var pen = new Pen(lightBorderColor, 1.2f))
             {
                 e.Graphics.DrawEllipse(pen, 1, 1, p.Width - 3, p.Height - 3);
@@ -317,17 +329,8 @@ namespace fx3u
 
                 // 開啟定時輪詢
                 pollTimer.Start();
-                btnStartFlow.Enabled = true;
-                btnRunSequence.Enabled = true;
 
-                // 復歸、單一作業、指定作業、連續作業為第2題專用
-                bool isQ2 = (cmbQuestions.SelectedIndex == 2); // 第2題在 Index 2
-                btnStandby.Enabled = isQ2;
-                btnSingleJob.Enabled = isQ2;
-                btnFlipOnly.Enabled = isQ2;
-                btnContinuousJob.Enabled = isQ2;
-
-                AppendLog("INFO", "連線建立成功，開始輪詢狀態。");
+                AppendLog("INFO", "連線建立成功，開始背景輪詢狀態。");
             }
             catch (Exception ex)
             {
@@ -344,12 +347,9 @@ namespace fx3u
         private void btnDisconnect_Click(object sender, EventArgs e)
         {
             pollTimer.Stop();
-            btnStartFlow.Enabled = false;
-            btnRunSequence.Enabled = false;
-            btnStandby.Enabled = false;
-            btnSingleJob.Enabled = false;
-            btnFlipOnly.Enabled = false;
-            btnContinuousJob.Enabled = false;
+            _isConnectionNormal = false;
+            UpdateButtonsVisualState(false);
+            SetControlsEnabled(false);
 
             if (_comm != null)
             {
@@ -366,7 +366,7 @@ namespace fx3u
             cmbQuestions.Enabled = true; // 解鎖題目
             lblPollTime.Text = "輪詢時間: - ms";
 
-            // 重置所有燈號狀態為 OFF
+            // 重置所有燈號
             ResetLeds();
             AppendLog("INFO", "中斷連線。");
         }
@@ -390,18 +390,17 @@ namespace fx3u
 
         private async void pollTimer_Tick(object sender, EventArgs e)
         {
-            // 防止重入
             if (_isPolling || _comm == null || !_comm.IsOpen) return;
             _isPolling = true;
 
             var watch = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                // 非同步讀取 X0~X17 與 Y0~Y17 狀態，確保 UI 不會卡頓
+                // 非同步讀取 X0~X17 與 Y0~Y17 狀態，確保 UI 不卡頓
                 bool[] xStates = await Task.Run(() => _comm.ReadDeviceStates(true));
                 bool[] yStates = await Task.Run(() => _comm.ReadDeviceStates(false));
 
-                // 回到 UI 執行緒後更新 UI 燈號
+                // 回到 UI 執行緒更新 UI 燈號
                 for (int i = 0; i < 16; i++)
                 {
                     if (_xLeds[i].Tag == null || (bool)_xLeds[i].Tag != xStates[i])
@@ -417,7 +416,16 @@ namespace fx3u
                     }
                 }
 
-                // 同步紅、黃、綠指示燈與 Y15、Y16、Y17 的狀態
+                // 首次成功取得 PLC 數值回應，切換按鈕為彩色並啟用
+                if (!_isConnectionNormal)
+                {
+                    _isConnectionNormal = true;
+                    UpdateButtonsVisualState(true);
+                    SetControlsEnabled(true);
+                    AppendLog("INFO", "PLC 通訊正常取得數據，已啟用控制功能。");
+                }
+
+                // 同步三色燈面板與 Y15 (RL), Y16 (YL), Y17 (GL)
                 if (pnlRL.Tag == null || (bool)pnlRL.Tag != yStates[13])
                 {
                     pnlRL.Tag = yStates[13];
@@ -434,12 +442,13 @@ namespace fx3u
                     pnlGL.Invalidate();
                 }
 
-                // 第 2 題 Y17 (待機綠燈) 狀態動態邏輯判定：
+                // 第 2 題 Y17 (待機綠燈) 狀態聯鎖動態判定：
                 // 條件: (Y0~Y10皆為off) AND (X5 off) AND (X1、X3、X4皆on) AND (X6 OR X7為on)
                 if (cmbQuestions.SelectedIndex == 2 && btnRunSequence.Enabled)
                 {
                     bool condY0_10Off = true;
-                    for (int j = 0; j <= 8; j++) // Coil 0~8 對應 Y0~Y7, Y10
+                    // Y0~Y7 (0~7), Y10 (8)
+                    for (int j = 0; j <= 8; j++)
                     {
                         if (yStates[j])
                         {
@@ -461,7 +470,45 @@ namespace fx3u
                         _yLeds[15].Invalidate();
                         pnlGL.Tag = targetY17;
                         pnlGL.Invalidate();
-                        AppendLog("INFO", $"第2題待機聯鎖改變，自動設定 Y17 待機綠燈為 {(targetY17 ? "ON" : "OFF")}。");
+                        AppendLog("INFO", $"第2題待機聯鎖觸發，自動設定 Y17 待機綠燈為 {(targetY17 ? "ON" : "OFF")}。");
+                    }
+                }
+
+                // 第 1 題 Y16 (待機黃燈) 狀態聯鎖動態判定：
+                // 條件: (Y0~Y7皆為off) AND (X1、X2皆 on) AND (X7~X12皆為off)
+                if (cmbQuestions.SelectedIndex == 1 && btnRunSequence.Enabled)
+                {
+                    bool condY0_7Off = true;
+                    for (int j = 0; j <= 7; j++)
+                    {
+                        if (yStates[j])
+                        {
+                            condY0_7Off = false;
+                            break;
+                        }
+                    }
+                    bool condX12On = xStates[1] && xStates[2];
+                    bool condX7_12Off = true;
+                    for (int j = 7; j <= 12; j++)
+                    {
+                        if (xStates[j])
+                        {
+                            condX7_12Off = false;
+                            break;
+                        }
+                    }
+
+                    bool targetY16 = condY0_7Off && condX12On && condX7_12Off;
+
+                    if (yStates[14] != targetY16)
+                    {
+                        await Task.Run(() => _comm.ForceCoil(14, targetY16));
+                        yStates[14] = targetY16;
+                        _yLeds[14].Tag = targetY16;
+                        _yLeds[14].Invalidate();
+                        pnlYL.Tag = targetY16;
+                        pnlYL.Invalidate();
+                        AppendLog("INFO", $"第1題待機聯鎖觸發，自動設定 Y16 待機黃燈為 {(targetY16 ? "ON" : "OFF")}。");
                     }
                 }
 
@@ -471,11 +518,16 @@ namespace fx3u
             catch (Exception ex)
             {
                 AppendLog("ERROR", $"狀態更新失敗: {ex.Message}");
-                // 如果是嚴重的通訊中斷，我們主動斷連，避免無窮報錯
+                if (_isConnectionNormal)
+                {
+                    _isConnectionNormal = false;
+                    UpdateButtonsVisualState(false);
+                    SetControlsEnabled(false);
+                }
                 if (_comm == null || !_comm.IsOpen)
                 {
                     btnDisconnect_Click(this, EventArgs.Empty);
-                    MessageBox.Show("通訊發生異常，已自動中斷連線。\n詳細原因: " + ex.Message, "連線中斷", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show("通訊發生異常，已自動斷開連線。\n原因: " + ex.Message, "連線中斷", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
             finally
@@ -493,23 +545,21 @@ namespace fx3u
             bool currentVal = _yLeds[index].Tag != null && (bool)_yLeds[index].Tag;
             bool targetVal = !currentVal;
 
-            btn.Enabled = false; // 暫時停用，避免快速連擊
+            btn.Enabled = false; // 防連擊
             try
             {
                 string octStr = GetOctalString(index);
-                AppendLog("INFO", $"正發送控制 Y{octStr} 為 {(targetVal ? "ON" : "OFF")}...");
-                
-                // 異步執行強制單點控制，避免按鈕點擊造成視窗短暫凍結
+                AppendLog("INFO", $"發送強制寫入 Y{octStr} 為 {(targetVal ? "ON" : "OFF")}...");
                 await Task.Run(() => _comm.ForceCoil(index, targetVal));
                 
-                // 成功後立即將對應的燈號先更新，提供即時的視覺回饋
+                // 成功後先行更新 UI 給予立即回饋
                 _yLeds[index].Tag = targetVal;
                 _yLeds[index].Invalidate();
             }
             catch (Exception ex)
             {
                 AppendLog("ERROR", $"控制 Y{GetOctalString(index)} 失敗: {ex.Message}");
-                MessageBox.Show($"寫入控制指令時發生錯誤:\n{ex.Message}", "寫入失敗", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"控制寫入指令失敗:\n{ex.Message}", "寫入失敗", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
@@ -519,14 +569,12 @@ namespace fx3u
 
         private void Comm_LogMessage(string type, string msg)
         {
-            // 因 Serial 讀寫程序在 Task.Run 非同步執行緒中，這裡必須使用 Invoke 回到 UI 執行緒
             if (this.InvokeRequired)
             {
                 this.BeginInvoke(new Action<string, string>(Comm_LogMessage), type, msg);
                 return;
             }
 
-            // 判斷是否只顯示一般訊息或 Hex 資料
             if ((type == "TX" || type == "RX") && !chkShowHex.Checked)
             {
                 return;
@@ -542,10 +590,9 @@ namespace fx3u
             string timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
             string prefix = $"[{timestamp}] [{type}] ";
             
-            // 加入日誌文字
             txtLog.AppendText(prefix + msg + Environment.NewLine);
 
-            // 控制日誌大小 (防止記憶體無限增長，保持最大約 500 行)
+            // 控制日誌緩衝行數在 500 行內
             if (txtLog.Lines.Length > 500)
             {
                 string[] newLines = new string[300];
@@ -553,7 +600,6 @@ namespace fx3u
                 txtLog.Lines = newLines;
             }
 
-            // 捲動到最底端
             txtLog.SelectionStart = txtLog.Text.Length;
             txtLog.ScrollToCaret();
         }
@@ -588,7 +634,6 @@ namespace fx3u
 
         private void MainForm_Resize(object sender, EventArgs e)
         {
-            // 在視窗縮放時，動態微調 splitContainer 的分割距離，保持左右群組 45% : 55% 的黃金比例
             splitContainer.SplitterDistance = (int)(splitContainer.Width * 0.45);
         }
 
@@ -597,11 +642,11 @@ namespace fx3u
             if (_comm == null || !_comm.IsOpen) return;
 
             btnStartFlow.Enabled = false;
-            AppendLog("INFO", "=== 啟動三色燈自動流程控制 ===");
+            AppendLog("INFO", "=== 啟動三色燈指示流程 (RL -> YL -> GL) ===");
             try
             {
-                // 1. Y15 (RL 紅燈) ON 1秒後熄滅
-                AppendLog("INFO", "流程 [1/3]: Y15 (RL 紅色指示燈) ON...");
+                // 1. RL (Y15) ON 1s -> OFF
+                AppendLog("INFO", "步驟 [1/3]: Y15 (RL 紅色指示燈) ON...");
                 await Task.Run(() => _comm.ForceCoil(13, true));
                 pnlRL.Tag = true;
                 pnlRL.Invalidate();
@@ -609,15 +654,15 @@ namespace fx3u
                 _yLeds[13].Invalidate();
                 await Task.Delay(1000);
 
-                AppendLog("INFO", "流程 [1/3]: Y15 (RL 紅色指示燈) OFF...");
+                AppendLog("INFO", "步驟 [1/3]: Y15 (RL 紅色指示燈) OFF...");
                 await Task.Run(() => _comm.ForceCoil(13, false));
                 pnlRL.Tag = false;
                 pnlRL.Invalidate();
                 _yLeds[13].Tag = false;
                 _yLeds[13].Invalidate();
 
-                // 2. Y16 (YL 黃燈) ON 1秒後熄滅
-                AppendLog("INFO", "流程 [2/3]: Y16 (YL 黃色指示燈) ON...");
+                // 2. YL (Y16) ON 1s -> OFF
+                AppendLog("INFO", "步驟 [2/3]: Y16 (YL 黃色指示燈) ON...");
                 await Task.Run(() => _comm.ForceCoil(14, true));
                 pnlYL.Tag = true;
                 pnlYL.Invalidate();
@@ -625,15 +670,15 @@ namespace fx3u
                 _yLeds[14].Invalidate();
                 await Task.Delay(1000);
 
-                AppendLog("INFO", "流程 [2/3]: Y16 (YL 黃色指示燈) OFF...");
+                AppendLog("INFO", "步驟 [2/3]: Y16 (YL 黃色指示燈) OFF...");
                 await Task.Run(() => _comm.ForceCoil(14, false));
                 pnlYL.Tag = false;
                 pnlYL.Invalidate();
                 _yLeds[14].Tag = false;
                 _yLeds[14].Invalidate();
 
-                // 3. Y17 (GL 綠燈) ON 1秒後熄滅
-                AppendLog("INFO", "流程 [3/3]: Y17 (GL 綠色指示燈) ON...");
+                // 3. GL (Y17) ON 1s -> OFF
+                AppendLog("INFO", "步驟 [3/3]: Y17 (GL 綠色指示燈) ON...");
                 await Task.Run(() => _comm.ForceCoil(15, true));
                 pnlGL.Tag = true;
                 pnlGL.Invalidate();
@@ -641,21 +686,19 @@ namespace fx3u
                 _yLeds[15].Invalidate();
                 await Task.Delay(1000);
 
-                AppendLog("INFO", "流程 [3/3]: Y17 (GL 綠色指示燈) OFF...");
+                AppendLog("INFO", "步驟 [3/3]: Y17 (GL 綠色指示燈) OFF...");
                 await Task.Run(() => _comm.ForceCoil(15, false));
                 pnlGL.Tag = false;
                 pnlGL.Invalidate();
                 _yLeds[15].Tag = false;
                 _yLeds[15].Invalidate();
 
-                AppendLog("INFO", "=== 三色燈自動流程控制順利結束 ===");
+                AppendLog("INFO", "=== 三色燈指示流程圓滿完成 ===");
             }
             catch (Exception ex)
             {
-                AppendLog("ERROR", $"流程控制中斷: {ex.Message}");
+                AppendLog("ERROR", $"流程異常中斷: {ex.Message}");
                 MessageBox.Show($"流程控制執行失敗:\n{ex.Message}", "流程中斷", MessageBoxButtons.OK, MessageBoxIcon.Error);
-
-                // 發生異常時，強制關閉 Y15~Y17 確保硬體安全
                 try
                 {
                     await Task.Run(() =>
@@ -679,7 +722,7 @@ namespace fx3u
 
         private static readonly string[] QuestionIoData = new string[]
         {
-            // 第 1 題 (機電丙一)
+            // 第 1 題
             @"X0 a1下
 X1 a0上
 X2 s0進料
@@ -710,7 +753,7 @@ Y15 紅運轉
 Y16 黃復歸
 Y17 綠待機",
 
-            // 第 2 題 (機電丙二)
+            // 第 2 題
             @"X0 a1上
 X1 a0下
 X2 b1進料端
@@ -742,7 +785,7 @@ Y15 紅燈運轉
 Y16 黃燈復歸
 Y17 綠燈待機",
 
-            // 第 3 題 (機電丙三)
+            // 第 3 題
             @"X0 a1進
 X1 a0退
 X2 b0零度
@@ -759,7 +802,6 @@ X15 2R連續/單
 X16 ST/RST
 X17 EMS急停
 
-
 Y0 A 進
 
 Y2 R2零度
@@ -773,7 +815,7 @@ Y15 紅燈運轉
 Y16 黃燈復歸
 Y17 綠燈待機",
 
-            // 第 4 題 (機電丙四)
+            // 第 4 題
             @"X0 a1印下
 X1 a0印上
 X2 b1鑽孔下
@@ -804,7 +846,7 @@ Y15 紅燈運轉
 Y16 黃燈復歸
 Y17 綠燈待機",
 
-            // 第 5 題 (機電丙五)
+            // 第 5 題
             @"X0 a0頂料上
 X1 b1水平前
 X2 b0水平後
@@ -842,24 +884,68 @@ Y17 綠待機"
             int selectedIndex = cmbQuestions.SelectedIndex;
             if (selectedIndex <= 0)
             {
-                // 重置點位名稱為預設
                 ResetIoNames();
                 AppendLog("INFO", "重置 IO 點位名稱為預設值。");
                 return;
             }
 
-            try
+            LoadIoNamesFromFile(selectedIndex);
+
+            // 若已連線，動態切換各特定題目按鈕啟用狀態
+            if (_comm != null && _comm.IsOpen)
             {
-                // 直接使用已轉為 UTF-8 的內嵌字串資料，免去讀取外部檔案
-                string ioDataText = QuestionIoData[selectedIndex - 1];
-                LoadIoNamesFromText(ioDataText);
-                AppendLog("INFO", $"成功載入第 {selectedIndex} 題 (機電丙{GetChineseNumber(selectedIndex)}) 的 IO 表。");
+                bool isQ1OrQ2 = (selectedIndex == 1 || selectedIndex == 2);
+                btnStandby.Enabled = isQ1OrQ2;
+                btnSingleJob.Enabled = isQ1OrQ2;
+                btnFlipOnly.Enabled = isQ1OrQ2;
+                btnContinuousJob.Enabled = isQ1OrQ2;
             }
-            catch (Exception ex)
+        }
+
+        private void LoadIoNamesFromFile(int index)
+        {
+            string filename = $"IO表-機丙{index}.txt";
+            string[] searchPaths = new string[]
             {
-                MessageBox.Show($"解析記憶體中題目 {selectedIndex} 的 IO 表時發生錯誤：\n{ex.Message}", "載入失敗", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                AppendLog("ERROR", $"解析題目 {selectedIndex} 資料時發生錯誤: {ex.Message}");
-                ResetIoNames();
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, filename),
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", filename),
+                Path.Combine(Environment.CurrentDirectory, filename),
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", filename),
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", filename)
+            };
+
+            string foundPath = null;
+            foreach (var path in searchPaths)
+            {
+                if (File.Exists(path))
+                {
+                    foundPath = path;
+                    break;
+                }
+            }
+
+            if (foundPath != null)
+            {
+                try
+                {
+                    string text = File.ReadAllText(foundPath, Encoding.UTF8);
+                    if (text.Contains("\uFFFD"))
+                    {
+                        text = File.ReadAllText(foundPath, Encoding.Default);
+                    }
+                    LoadIoNamesFromText(text);
+                    AppendLog("INFO", $"成功自檔案載入第 {index} 題 IO 設定：{Path.GetFileName(foundPath)}");
+                }
+                catch (Exception ex)
+                {
+                    AppendLog("ERROR", $"讀取 IO 設定檔 {filename} 失敗: {ex.Message}，載入內置設定。");
+                    LoadIoNamesFromText(QuestionIoData[index - 1]);
+                }
+            }
+            else
+            {
+                AppendLog("WARNING", $"找不到外部檔案 {filename}，改載入內置備用設定。");
+                LoadIoNamesFromText(QuestionIoData[index - 1]);
             }
         }
 
@@ -868,14 +954,12 @@ Y17 綠待機"
             string[] xNames = new string[16];
             string[] yNames = new string[16];
 
-            // 解析 UTF-8 字串內容
             string[] lines = text.Split(new string[] { "\r\n", "\n" }, StringSplitOptions.None);
             foreach (string line in lines)
             {
                 string trimmed = line.Trim();
                 if (string.IsNullOrEmpty(trimmed)) continue;
 
-                // 使用空格或定位鍵分割元件編號與名稱
                 string[] parts = trimmed.Split(new char[] { ' ', '\t' }, 2, StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length < 2) continue;
 
@@ -900,7 +984,7 @@ Y17 綠待機"
                 }
             }
 
-            // 更新 UI Labels
+            // 更新 UI Labels 與調整按鈕寬度
             for (int i = 0; i < 16; i++)
             {
                 string octStr = GetOctalString(i);
@@ -937,19 +1021,6 @@ Y17 綠待機"
             return -1;
         }
 
-        private string GetChineseNumber(int num)
-        {
-            switch (num)
-            {
-                case 1: return "一";
-                case 2: return "二";
-                case 3: return "三";
-                case 4: return "四";
-                case 5: return "五";
-                default: return num.ToString();
-            }
-        }
-
         private void AdjustComboBoxWidth(ComboBox comboBox)
         {
             int maxWidth = 0;
@@ -958,7 +1029,6 @@ Y17 綠待機"
                 foreach (var item in comboBox.Items)
                 {
                     string text = item.ToString();
-                    // 量測文字寬度並加入 30 像素作為下拉箭頭與邊框的 Padding 緩衝
                     int width = (int)g.MeasureString(text, comboBox.Font).Width + 30;
                     if (width > maxWidth)
                     {
@@ -1014,7 +1084,7 @@ Y17 綠待機"
                 }
                 else if (char.IsWhiteSpace(c))
                 {
-                    i++; // 忽略空格
+                    i++;
                 }
                 else
                 {
@@ -1026,7 +1096,7 @@ Y17 綠待機"
 
         private async Task<bool> WaitForInputStateAsync(int xIndex, bool expectedState, int timeoutSeconds = 15)
         {
-            int loops = timeoutSeconds * 10; // 每個 loop 100ms
+            int loops = timeoutSeconds * 10;
             for (int i = 0; i < loops; i++)
             {
                 if (_xLeds[xIndex].Tag != null && (bool)_xLeds[xIndex].Tag == expectedState)
@@ -1035,7 +1105,7 @@ Y17 綠待機"
                 }
                 await Task.Delay(100);
             }
-            return false; // 超時
+            return false;
         }
 
         private async Task RunSequenceAsync(string seqText)
@@ -1057,14 +1127,8 @@ Y17 綠待機"
                 return;
             }
 
-            // 停用 UI 控制項
-            btnRunSequence.Enabled = false;
-            btnStandby.Enabled = false;
-            btnSingleJob.Enabled = false;
-            btnFlipOnly.Enabled = false;
-            btnContinuousJob.Enabled = false;
-            btnStartFlow.Enabled = false;
-            txtSequence.Enabled = false;
+            // 停用所有按鈕防止衝擊
+            SetControlsEnabled(false);
             AppendLog("INFO", $"=== 開始執行動作序列: {seqText} ===");
 
             try
@@ -1076,7 +1140,6 @@ Y17 綠待機"
 
                     if (step.StartsWith("T"))
                     {
-                        // 暫停延時
                         int seconds = int.Parse(step.Substring(1));
                         AppendLog("INFO", $"暫停 {seconds} 秒...");
                         await Task.Delay(seconds * 1000);
@@ -1087,14 +1150,12 @@ Y17 綠待機"
                         char action = step[1];
 
                         int outputY1 = -1;
-                        int outputY2 = -1; // 用於雙閥的另一個點
+                        int outputY2 = -1;
                         bool stateY1 = false;
                         bool stateY2 = false;
                         
                         int waitX = -1;
                         bool expectedX = false;
-                        
-                        // 到位後要復歸為 false 的輸出點 (只適用雙閥)
                         int cleanupY = -1;
 
                         if (cylinder == 'A')
@@ -1108,7 +1169,7 @@ Y17 綠待機"
                                 
                                 waitX = 0;      // X0 (a1)
                                 expectedX = true;
-                                cleanupY = 0;   // 到位後關閉 Y0
+                                cleanupY = 0;   // 到位後釋放 Y0
                             }
                             else // '-'
                             {
@@ -1119,7 +1180,7 @@ Y17 綠待機"
                                 
                                 waitX = 1;      // X1 (a0)
                                 expectedX = true;
-                                cleanupY = 1;   // 到位後關閉 Y1
+                                cleanupY = 1;   // 到位後釋放 Y1
                             }
                         }
                         else if (cylinder == 'B')
@@ -1128,17 +1189,14 @@ Y17 綠待機"
                             {
                                 outputY1 = 2;   // Y2
                                 stateY1 = true;
-                                
                                 waitX = 2;      // X2 (b1)
                                 expectedX = true;
-                                // 單閥，到位後不清理，維持 Y2=true 以免彈簧縮回
-                                cleanupY = -1; 
+                                cleanupY = -1;  // 單閥維持狀態
                             }
                             else // '-'
                             {
                                 outputY1 = 2;   // Y2
                                 stateY1 = false;
-                                
                                 waitX = 3;      // X3 (b0)
                                 expectedX = true;
                                 cleanupY = -1;
@@ -1153,9 +1211,9 @@ Y17 綠待機"
                                 outputY2 = 4;   // Y4
                                 stateY2 = false;
                                 
-                                waitX = 4;      // X4 (c0 off)
+                                waitX = 4;      // X4 off (c0 離去)
                                 expectedX = false;
-                                cleanupY = 3;   // 到位後關閉 Y3
+                                cleanupY = 3;
                             }
                             else // '-'
                             {
@@ -1164,9 +1222,9 @@ Y17 綠待機"
                                 outputY2 = 3;   // Y3
                                 stateY2 = false;
                                 
-                                waitX = 4;      // X4 (c0 on)
+                                waitX = 4;      // X4 on (c0 夾開)
                                 expectedX = true;
-                                cleanupY = 4;   // 到位後關閉 Y4
+                                cleanupY = 4;
                             }
                         }
                         else if (cylinder == 'D')
@@ -1178,9 +1236,9 @@ Y17 綠待機"
                                 outputY2 = 8;   // Y10 (index 8)
                                 stateY2 = false;
                                 
-                                waitX = 5;      // X5 (ps1 on)
+                                waitX = 5;      // X5 on (ps1 真空)
                                 expectedX = true;
-                                cleanupY = 5;   // 到位後關閉 Y5
+                                cleanupY = 5;
                             }
                             else // '-'
                             {
@@ -1191,11 +1249,11 @@ Y17 綠待機"
                                 
                                 waitX = 5;      // X5 off
                                 expectedX = false;
-                                cleanupY = 8;   // 到位後關閉 Y10
+                                cleanupY = 8;
                             }
                         }
 
-                        // 1. 送出 PLC 指令
+                        // 下發 PLC 指令
                         if (outputY1 != -1)
                         {
                             int yVal1 = outputY1;
@@ -1209,34 +1267,23 @@ Y17 綠待機"
                             await Task.Run(() => _comm.ForceCoil(yVal2, sVal2));
                         }
 
-                        // 2. 等待極限開關狀態
+                        // 等待極限開關狀態
                         if (waitX != -1)
                         {
-                            string waitName;
-                            if (waitX == 4)
-                            {
-                                waitName = expectedX ? "X4(c0 on)" : "X4(c0 off)";
-                            }
-                            else if (waitX == 5)
-                            {
-                                waitName = expectedX ? "X5(ps1 on)" : "X5(ps1 off)";
-                            }
-                            else
-                            {
-                                waitName = $"X{waitX}";
-                            }
+                            string waitName = (waitX == 4) ? (expectedX ? "X4(c0 on)" : "X4(c0 off)")
+                                            : (waitX == 5) ? (expectedX ? "X5(ps1 on)" : "X5(ps1 off)")
+                                            : $"X{waitX}";
                             
                             AppendLog("INFO", $"等待極限開關 {waitName} 到達目標狀態: {expectedX}...");
-                            
-                            bool waitSuccess = await WaitForInputStateAsync(waitX, expectedX, 15); // 15秒超時
+                            bool waitSuccess = await WaitForInputStateAsync(waitX, expectedX, 15);
                             if (!waitSuccess)
                             {
-                                throw new Exception($"等待步驟 {step} 的極限開關 {waitName} 超時 (15秒)！氣壓缸可能卡住或感測器失效。");
+                                throw new Exception($"等待步驟 {step} 的極限開關 {waitName} 超時！");
                             }
-                            AppendLog("INFO", $"步驟 {step} 到位成功。");
+                            AppendLog("INFO", $"步驟 {step} 順利到位。");
                         }
 
-                        // 3. 到位後「停止」動作 (將雙閥 Y 點關閉)
+                        // 到位後關閉雙閥線圈
                         if (cleanupY != -1)
                         {
                             int cleanY = cleanupY;
@@ -1253,44 +1300,129 @@ Y17 綠待機"
                 AppendLog("ERROR", $"動作序列執行失敗: {ex.Message}");
                 MessageBox.Show($"動作序列在中途發生錯誤而中斷：\n{ex.Message}", "執行中斷", MessageBoxButtons.OK, MessageBoxIcon.Error);
 
-                // 安全機制：發生錯誤時，強制將所有相關的輸出 (Y0~Y6, Y10) 關閉，避免硬體損壞
+                // 安全關斷所有閥件
                 try
                 {
                     await Task.Run(() =>
                     {
-                        _comm.ForceCoil(0, false);
-                        _comm.ForceCoil(1, false);
-                        _comm.ForceCoil(2, false);
-                        _comm.ForceCoil(3, false);
-                        _comm.ForceCoil(4, false);
-                        _comm.ForceCoil(5, false);
-                        _comm.ForceCoil(6, false); // Y6
-                        _comm.ForceCoil(8, false); // Y10
+                        for (int i = 0; i <= 8; i++) _comm.ForceCoil(i, false);
                     });
                 }
                 catch { }
             }
             finally
             {
-                // 恢復 UI 按鈕狀態
-                if (_comm != null && _comm.IsOpen)
-                {
-                    btnRunSequence.Enabled = true;
-                    btnStartFlow.Enabled = true;
-                    txtSequence.Enabled = true;
-
-                    bool isQ2 = (cmbQuestions.SelectedIndex == 2);
-                    btnStandby.Enabled = isQ2;
-                    btnSingleJob.Enabled = isQ2;
-                    btnFlipOnly.Enabled = isQ2;
-                    btnContinuousJob.Enabled = isQ2;
-                }
+                SetControlsEnabled(true);
             }
         }
 
         private async void btnStandby_Click(object sender, EventArgs e)
         {
-            await RunStandbySequenceAsync();
+            if (cmbQuestions.SelectedIndex == 1)
+            {
+                await RunStandbySequenceQ1Async();
+            }
+            else if (cmbQuestions.SelectedIndex == 2)
+            {
+                await RunStandbySequenceAsync();
+            }
+        }
+
+        private async Task RunStandbySequenceQ1Async()
+        {
+            if (_comm == null || !_comm.IsOpen)
+            {
+                MessageBox.Show("請先連線 PLC 才能執行待機復歸！", "未連線", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            SetControlsEnabled(false);
+            AppendLog("INFO", "=== 開始執行第 1 題待機復歸流程 ===");
+            CancellationTokenSource y16BlinkCts = null;
+
+            try
+            {
+                // Y16 閃爍
+                y16BlinkCts = new CancellationTokenSource();
+                CancellationToken token = y16BlinkCts.Token;
+                _ = Task.Run(async () => {
+                    try
+                    {
+                        bool state = true;
+                        while (!token.IsCancellationRequested)
+                        {
+                            _comm.ForceCoil(14, state);
+                            state = !state;
+                            await Task.Delay(500, token);
+                        }
+                    }
+                    catch { }
+                }, token);
+
+                // 1. 所有 Y 先 off 1秒
+                AppendLog("INFO", "復歸步驟 [1/4]: 所有 Y 點位 OFF 1秒...");
+                await Task.Run(() => {
+                    for (int i = 0; i < 16; i++) _comm.ForceCoil(i, false);
+                });
+                await Task.Delay(1000);
+
+                // 2. Y7 (B- 放) ON 1秒鐘
+                AppendLog("INFO", "復歸步驟 [2/4]: Y7 (B-) ON 1秒...");
+                await Task.Run(() => _comm.ForceCoil(7, true));
+                await Task.Delay(1000);
+                await Task.Run(() => _comm.ForceCoil(7, false));
+
+                // 3. Y5 (M2- 右移) ON 直到 X2 (s0進料) ON
+                AppendLog("INFO", "復歸步驟 [3/4]: Y5 ON 直到 X2 ON...");
+                await Task.Run(() => {
+                    _comm.ForceCoil(5, true);
+                    _comm.ForceCoil(8, false); // Y10 off
+                });
+                if (!await WaitForInputStateAsync(2, true, 15))
+                {
+                    throw new Exception("等待 X2 ON 逾時！");
+                }
+                await Task.Run(() => _comm.ForceCoil(5, false));
+
+                // 4. 關閉黃燈閃爍，點亮待機綠燈 (Y17)
+                AppendLog("INFO", "復歸步驟 [4/4]: 停止黃燈閃爍，點亮待機綠燈 (Y17)...");
+                if (y16BlinkCts != null)
+                {
+                    y16BlinkCts.Cancel();
+                    y16BlinkCts.Dispose();
+                    y16BlinkCts = null;
+                }
+                await Task.Run(() => {
+                    _comm.ForceCoil(14, false);
+                    _comm.ForceCoil(15, true);
+                });
+
+                AppendLog("INFO", "=== 第 1 題待機復歸流程成功完成 ===");
+                MessageBox.Show("機構已成功回到機械原點！", "復歸成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("ERROR", $"第 1 題待機復歸中斷: {ex.Message}");
+                MessageBox.Show($"第 1 題待機復歸執行失敗：\n{ex.Message}", "復歸中斷", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                if (y16BlinkCts != null)
+                {
+                    y16BlinkCts.Cancel();
+                    y16BlinkCts.Dispose();
+                    y16BlinkCts = null;
+                }
+                try
+                {
+                    await Task.Run(() => {
+                        for (int i = 0; i < 16; i++) _comm.ForceCoil(i, false);
+                        _comm.ForceCoil(15, true); // 保全待機
+                    });
+                }
+                catch { }
+            }
+            finally
+            {
+                SetControlsEnabled(true);
+            }
         }
 
         private async Task RunStandbySequenceAsync()
@@ -1301,58 +1433,41 @@ Y17 綠待機"
                 return;
             }
 
-            // 停用 UI 控制項
-            btnRunSequence.Enabled = false;
-            btnStandby.Enabled = false;
-            btnSingleJob.Enabled = false;
-            btnFlipOnly.Enabled = false;
-            btnContinuousJob.Enabled = false;
-            btnStartFlow.Enabled = false;
-            txtSequence.Enabled = false;
+            SetControlsEnabled(false);
             AppendLog("INFO", "=== 開始執行待機復歸流程 ===");
             CancellationTokenSource y16BlinkCts = null;
 
             try
             {
-                // 啟動 Y16 (YL 黃燈) 背景閃爍 (每秒一次 on off)
-                AppendLog("INFO", "啟動 Y16 運轉黃燈閃爍服務...");
                 y16BlinkCts = new CancellationTokenSource();
                 CancellationToken token = y16BlinkCts.Token;
                 _ = Task.Run(async () => {
                     try
                     {
-                        bool y16State = true;
+                        bool state = true;
                         while (!token.IsCancellationRequested)
                         {
-                            _comm.ForceCoil(14, y16State); // Y16
-                            y16State = !y16State;
+                            _comm.ForceCoil(14, state);
+                            state = !state;
                             await Task.Delay(500, token);
                         }
                     }
-                    catch (TaskCanceledException) { }
-                    catch (Exception ex)
-                    {
-                        AppendLog("ERROR", $"Y16 復歸黃燈閃爍服務出錯: {ex.Message}");
-                    }
+                    catch { }
                 }, token);
 
                 // 1. 所有 Y 接點先 off 0.5 秒
-                AppendLog("INFO", "復歸步驟 [1/9]: 所有 Y 接點先 off 0.5 秒...");
+                AppendLog("INFO", "復歸步驟 [1/9]: 所有 Y 接點 OFF 0.5 秒...");
                 await Task.Run(() => {
-                    for (int i = 0; i < 16; i++)
-                    {
-                        _comm.ForceCoil(i, false);
-                    }
+                    for (int i = 0; i < 16; i++) _comm.ForceCoil(i, false);
                 });
                 await Task.Delay(500);
 
                 // 2. Y2 off 到 X3 on
-                AppendLog("INFO", "復歸步驟 [2/9]: Y2 off...");
+                AppendLog("INFO", "復歸步驟 [2/9]: Y2 OFF，等待 B缸退回 X3...");
                 await Task.Run(() => _comm.ForceCoil(2, false));
-                AppendLog("INFO", "等待極限開關 X3(b0) 為 true...");
                 if (!await WaitForInputStateAsync(3, true, 15))
                 {
-                    throw new Exception("等待 X3(b0) 逾時！");
+                    throw new Exception("等待 X3(b0) ON 逾時！");
                 }
 
                 // 3. T1 (暫停 1 秒)
@@ -1360,28 +1475,26 @@ Y17 綠待機"
                 await Task.Delay(1000);
 
                 // 4. Y0 on 直到 X0 on
-                AppendLog("INFO", "復歸步驟 [4/9]: Y0 on (A+)...");
+                AppendLog("INFO", "復歸步驟 [4/9]: Y0 ON (A+)，等待 X0 ON...");
                 await Task.Run(() => {
                     _comm.ForceCoil(0, true);
                     _comm.ForceCoil(1, false);
                 });
-                AppendLog("INFO", "等待極限開關 X0(a1) 為 true...");
                 if (!await WaitForInputStateAsync(0, true, 15))
                 {
-                    throw new Exception("等待 X0(a1) 逾時！");
+                    throw new Exception("等待 X0(a1) ON 逾時！");
                 }
                 await Task.Run(() => _comm.ForceCoil(0, false));
 
                 // 5. Y6 on 直到 X6 on
-                AppendLog("INFO", "復歸步驟 [5/9]: Y6 on...");
+                AppendLog("INFO", "復歸步驟 [5/9]: Y6 ON (M+)，等待 X6 ON...");
                 await Task.Run(() => {
                     _comm.ForceCoil(6, true);
-                    _comm.ForceCoil(5, false); // 常規防雙控衝突
+                    _comm.ForceCoil(5, false);
                 });
-                AppendLog("INFO", "等待極限開關 X6 為 true...");
                 if (!await WaitForInputStateAsync(6, true, 15))
                 {
-                    throw new Exception("等待 X6 逾時！");
+                    throw new Exception("等待 X6 ON 逾時！");
                 }
                 await Task.Run(() => _comm.ForceCoil(6, false));
 
@@ -1390,123 +1503,98 @@ Y17 綠待機"
                 await Task.Delay(1000);
 
                 // 7. Y1 on 直到 X1 on
-                AppendLog("INFO", "復歸步驟 [7/9]: Y1 on (A-)...");
+                AppendLog("INFO", "復歸步驟 [7/9]: Y1 ON (A-)，等待 X1 ON...");
                 await Task.Run(() => {
                     _comm.ForceCoil(1, true);
                     _comm.ForceCoil(0, false);
                 });
-                AppendLog("INFO", "等待極限開關 X1(a0) 為 true...");
                 if (!await WaitForInputStateAsync(1, true, 15))
                 {
-                    throw new Exception("等待 X1(a0) 逾時！");
+                    throw new Exception("等待 X1(a0) ON 逾時！");
                 }
                 await Task.Run(() => _comm.ForceCoil(1, false));
 
                 // 8. Y4 on 直到 X4 on
-                AppendLog("INFO", "復歸步驟 [8/9]: Y4 on (C-)...");
+                AppendLog("INFO", "復歸步驟 [8/9]: Y4 ON (C-)，等待 X4 ON...");
                 await Task.Run(() => {
                     _comm.ForceCoil(4, true);
                     _comm.ForceCoil(3, false);
                 });
-                AppendLog("INFO", "等待極限開關 X4(c0) 為 true...");
                 if (!await WaitForInputStateAsync(4, true, 15))
                 {
-                    throw new Exception("等待 X4(c0) 逾時！");
+                    throw new Exception("等待 X4(c0) ON 逾時！");
                 }
                 await Task.Run(() => _comm.ForceCoil(4, false));
 
                 // 9. Y10 on 直到 ps1 off
-                AppendLog("INFO", "復歸步驟 [9/9]: Y10 on (D-)...");
+                AppendLog("INFO", "復歸步驟 [9/9]: Y10 ON (D-)，等待 X5 OFF...");
                 await Task.Run(() => {
                     _comm.ForceCoil(8, true); // Y10
                     _comm.ForceCoil(5, false); // Y5
                 });
-                AppendLog("INFO", "等待極限開關 X5(ps1) 為 false...");
                 if (!await WaitForInputStateAsync(5, false, 15))
                 {
-                    throw new Exception("等待 X5(ps1) 復歸逾時！");
+                    throw new Exception("等待 X5(ps1) OFF 逾時！");
                 }
                 await Task.Run(() => _comm.ForceCoil(8, false));
 
-                // 順利完成，停止 Y16 閃爍並確保熄滅
+                // 結束黃燈閃爍
                 if (y16BlinkCts != null)
                 {
                     y16BlinkCts.Cancel();
                     y16BlinkCts.Dispose();
                     y16BlinkCts = null;
                 }
-                await Task.Run(() => _comm.ForceCoil(14, false)); // Y16 off
+                await Task.Run(() => _comm.ForceCoil(14, false));
 
-                // 待機綠燈 (Y17) 由定時輪詢 pollTimer_Tick 動態運算前提條件並點亮。
-                AppendLog("INFO", "=== 待機復歸流程成功完成，已進入待機監控狀態 ===");
-                MessageBox.Show("機構已成功回到機械原點 (已進入待機狀態)！", "復歸成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                AppendLog("INFO", "=== 待機復歸流程成功完成，已進入待機監控 ====");
+                MessageBox.Show("機構已成功回到機械原點！", "復歸成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
                 AppendLog("ERROR", $"待機復歸中斷: {ex.Message}");
                 MessageBox.Show($"待機復歸執行失敗：\n{ex.Message}", "復歸中斷", MessageBoxButtons.OK, MessageBoxIcon.Error);
-
                 if (y16BlinkCts != null)
                 {
                     y16BlinkCts.Cancel();
                     y16BlinkCts.Dispose();
                     y16BlinkCts = null;
                 }
-
-                // 安全機制：發生錯誤時，強制將所有相關的輸出關閉
                 try
                 {
-                    await Task.Run(() =>
-                    {
-                        _comm.ForceCoil(0, false);
-                        _comm.ForceCoil(1, false);
-                        _comm.ForceCoil(2, false);
-                        _comm.ForceCoil(3, false);
-                        _comm.ForceCoil(4, false);
-                        _comm.ForceCoil(5, false);
-                        _comm.ForceCoil(6, false);
-                        _comm.ForceCoil(8, false);
-                        _comm.ForceCoil(14, false); // Y16 off
+                    await Task.Run(() => {
+                        for (int i = 0; i < 16; i++) _comm.ForceCoil(i, false);
                     });
                 }
                 catch { }
             }
             finally
             {
-                if (y16BlinkCts != null)
-                {
-                    y16BlinkCts.Cancel();
-                    y16BlinkCts.Dispose();
-                }
-
-                // 恢復 UI 按鈕狀態
-                if (_comm != null && _comm.IsOpen)
-                {
-                    btnRunSequence.Enabled = true;
-                    btnStartFlow.Enabled = true;
-                    txtSequence.Enabled = true;
-
-                    bool isQ2 = (cmbQuestions.SelectedIndex == 2);
-                    btnStandby.Enabled = isQ2;
-                    btnSingleJob.Enabled = isQ2;
-                    btnFlipOnly.Enabled = isQ2;
-                    btnContinuousJob.Enabled = isQ2;
-                }
+                SetControlsEnabled(true);
             }
         }
 
         private async void btnSingleJob_Click(object sender, EventArgs e)
         {
-            await RunSingleJobAsync();
+            if (cmbQuestions.SelectedIndex == 1)
+            {
+                await RunJobQ1Async(false); // 第1題單一作業
+            }
+            else if (cmbQuestions.SelectedIndex == 2)
+            {
+                await RunSingleJobAsync();
+            }
         }
 
         private async Task RunSingleJobAsync()
         {
-            // 前提檢查：必須在綠燈待機 (Y17 on) 狀態下才能執行
+            // 執行前提：Y17 ON 且 X10 ON
             bool isY17On = pnlGL.Tag != null && (bool)pnlGL.Tag;
-            if (!isY17On)
+            bool isX10On = _xLeds[8].Tag != null && (bool)_xLeds[8].Tag; // X10 index 8
+
+            if (!isY17On || !isX10On)
             {
-                MessageBox.Show("無法執行單一作業！\n前提條件：必須在綠燈待機 (Y17 為 ON) 狀態下才能執行！\n請先按下「復歸」按鈕使機構復歸。", "前提條件不符", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("無法執行單一作業！\n前提條件：必須在綠燈待機 (Y17 ON) 且有進料 (X10 ON) 狀態下才能執行！", "前提條件不符", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -1516,270 +1604,60 @@ Y17 綠待機"
                 return;
             }
 
-            // 停用 UI 控制項
-            btnRunSequence.Enabled = false;
-            btnStandby.Enabled = false;
-            btnSingleJob.Enabled = false;
-            btnFlipOnly.Enabled = false;
-            btnContinuousJob.Enabled = false;
-            btnStartFlow.Enabled = false;
-            txtSequence.Enabled = false;
-
+            SetControlsEnabled(false);
             AppendLog("INFO", "=== 開始執行單一作業流程 ===");
             CancellationTokenSource blinkCts = null;
 
             try
             {
-                // 點亮運轉紅燈 (Y15)，熄滅待機綠燈 (Y17)
+                // Y17 off, Y15 on
                 await Task.Run(() => {
-                    _comm.ForceCoil(15, false); // Y17 GL off
-                    _comm.ForceCoil(13, true);  // Y15 RL on
+                    _comm.ForceCoil(15, false); // GL off
+                    _comm.ForceCoil(13, true);  // RL on
                 });
 
-                // 1. 判斷 X10 (s0進料，十進位 index 8)
-                bool isX10 = _xLeds[8].Tag != null && (bool)_xLeds[8].Tag;
-                if (!isX10)
-                {
-                    AppendLog("INFO", "偵測到無進料 (X10 off)，開始 10 秒進料等待...");
-                    bool waitX10Success = false;
-                    for (int i = 0; i < 100; i++) // 100 * 100ms = 10 秒
-                    {
-                        await Task.Delay(100);
-                        if (_xLeds[8].Tag != null && (bool)_xLeds[8].Tag)
-                        {
-                            waitX10Success = true;
-                            break;
-                        }
-                    }
-
-                    if (!waitX10Success)
-                    {
-                        AppendLog("INFO", "進料等待超時 (10 秒)，且 X10 仍為 OFF。直接結束單一作業。");
-                        await Task.Run(() => {
-                            _comm.ForceCoil(13, false); // Y15 off
-                            _comm.ForceCoil(15, true);  // Y17 GL on
-                        });
-                        MessageBox.Show("無進料 (10秒等待超時)，單一作業已自動結束並復歸待機狀態。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        return; // 結束單一作業
-                    }
-                    else
-                    {
-                        AppendLog("INFO", "在 10 秒內偵測到進料 (X10 變為 ON)，繼續執行單一作業。");
-                    }
-                }
-
-                // 2. 當 X10 為 ON
-                // 判斷 X12 (s2重量下/顏色紅黑，十進位 index 10)
-                bool isX12 = _xLeds[10].Tag != null && (bool)_xLeds[10].Tag;
+                // 2. 判斷 X12 (顏色)
+                bool isX12 = _xLeds[10].Tag != null && (bool)_xLeds[10].Tag; // X12 index 10
                 if (!isX12)
                 {
-                    AppendLog("INFO", "偵測到 X12 (顏色紅黑) 為 OFF (黑色料)，啟用 Y15 閃爍 (每秒一次 on/off)。");
+                    AppendLog("INFO", "偵測到 X12 為 OFF (黑色料)，啟用 Y15 閃爍...");
                     blinkCts = new CancellationTokenSource();
                     CancellationToken token = blinkCts.Token;
-                    
-                    // 背景閃爍 Task
                     _ = Task.Run(async () => {
                         try
                         {
-                            bool y15State = true;
+                            bool state = true;
                             while (!token.IsCancellationRequested)
                             {
-                                _comm.ForceCoil(13, y15State);
-                                y15State = !y15State;
-                                await Task.Delay(500, token); // 每0.5秒反轉一次狀態，即1秒內完成一次完整on-off
+                                _comm.ForceCoil(13, state);
+                                state = !state;
+                                await Task.Delay(500, token);
                             }
                         }
-                        catch (TaskCanceledException) { }
-                        catch (Exception ex)
-                        {
-                            AppendLog("ERROR", $"Y15 閃爍背景服務出錯: {ex.Message}");
-                        }
+                        catch { }
                     }, token);
                 }
                 else
                 {
-                    AppendLog("INFO", "偵測到 X12 (顏色紅黑) 為 ON (紅色料)，Y15 保持恆亮。");
+                    AppendLog("INFO", "偵測到 X12 為 ON (紅色料)，Y15 保持恆亮。");
                 }
 
-                // 3. 判斷 X11 (重量上，十進位 index 9)
-                bool isX11 = _xLeds[9].Tag != null && (bool)_xLeds[9].Tag;
+                // 3. 判斷 X11 (姿勢)
+                bool isX11 = _xLeds[9].Tag != null && (bool)_xLeds[9].Tag; // X11 index 9
                 if (isX11)
                 {
-                    AppendLog("INFO", "條件分支：X11 (重量上) 為 ON，直接進行移料步驟。");
+                    AppendLog("INFO", "X11 為 ON，直接進入移料步驟。");
                 }
                 else
                 {
-                    AppendLog("INFO", "條件分支：X11 (重量上) 為 OFF，開始執行翻轉步驟。");
-                    
-                    // 執行翻轉步驟
-                    // 2-1. Y2 off (B-)
-                    AppendLog("INFO", "翻轉 [1/5]: Y2 off...");
-                    await Task.Run(() => _comm.ForceCoil(2, false));
-                    AppendLog("INFO", "等待 B缸退回到 X3(b0) 為 true...");
-                    if (!await WaitForInputStateAsync(3, true, 15))
-                    {
-                        throw new Exception("翻轉步驟中，等待退回 X3 逾時！");
-                    }
-
-                    // 2-2. Y3 on (C+) 直到 X4 off
-                    AppendLog("INFO", "翻轉 [2/5]: Y3 on (C+)...");
-                    await Task.Run(() => {
-                        _comm.ForceCoil(3, true);
-                        _comm.ForceCoil(4, false);
-                    });
-                    AppendLog("INFO", "等待 X4 off (c0離去)...");
-                    if (!await WaitForInputStateAsync(4, false, 15))
-                    {
-                        throw new Exception("翻轉步驟中，等待 X4 off 逾時！");
-                    }
-                    await Task.Run(() => _comm.ForceCoil(3, false));
-
-                    // 2-3. T1 (暫停 1 秒)
-                    AppendLog("INFO", "翻轉 [3/5]: 暫停 1 秒...");
-                    await Task.Delay(1000);
-
-                    // 2-4. Y0 on (A+) 直到 X0 on
-                    AppendLog("INFO", "翻轉 [4/5]: Y0 on (A+)...");
-                    await Task.Run(() => {
-                        _comm.ForceCoil(0, true);
-                        _comm.ForceCoil(1, false);
-                    });
-                    AppendLog("INFO", "等待 X0(a1) 為 true...");
-                    if (!await WaitForInputStateAsync(0, true, 15))
-                    {
-                        throw new Exception("翻轉步驟中，等待 X0(a1) 逾時！");
-                    }
-                    await Task.Run(() => _comm.ForceCoil(0, false));
-
-                    // 2-5. 判斷 X6/X7 進行旋轉
-                    bool isX6 = _xLeds[6].Tag != null && (bool)_xLeds[6].Tag;
-                    bool isX7 = _xLeds[7].Tag != null && (bool)_xLeds[7].Tag;
-
-                    if (isX6)
-                    {
-                        AppendLog("INFO", "翻轉分支 [X6 on]: 執行 Y7 on 直到 X7 on...");
-                        await Task.Run(() => {
-                            _comm.ForceCoil(7, true);
-                            _comm.ForceCoil(6, false);
-                        });
-                        if (!await WaitForInputStateAsync(7, true, 15))
-                        {
-                            throw new Exception("翻轉分支 [X6] 等待 X7 逾時！");
-                        }
-                        await Task.Run(() => _comm.ForceCoil(7, false));
-                    }
-                    else if (isX7)
-                    {
-                        AppendLog("INFO", "翻轉分支 [X7 on]: 執行 Y6 on 直到 X6 on...");
-                        await Task.Run(() => {
-                            _comm.ForceCoil(6, true);
-                            _comm.ForceCoil(7, false);
-                        });
-                        if (!await WaitForInputStateAsync(6, true, 15))
-                        {
-                            throw new Exception("翻轉分支 [X7] 等待 X6 逾時！");
-                        }
-                        await Task.Run(() => _comm.ForceCoil(6, false));
-                    }
-                    else
-                    {
-                        AppendLog("WARNING", "翻轉分支：未偵測到 X6 或 X7 為 ON，略過方向旋轉。");
-                    }
-
-                    // 2-6. 暫停 1 秒 (T1) 
-                    AppendLog("INFO", "翻轉後等待: 暫停 1 秒...");
-                    await Task.Delay(1000);
-
-                    // 2-7. Y1 on (A-) 直到 X1 on
-                    AppendLog("INFO", "翻轉 [5/5]: Y1 on (A-)...");
-                    await Task.Run(() => {
-                        _comm.ForceCoil(1, true);
-                        _comm.ForceCoil(0, false);
-                    });
-                    AppendLog("INFO", "等待 X1(a0) 為 true...");
-                    if (!await WaitForInputStateAsync(1, true, 15))
-                    {
-                        throw new Exception("翻轉步驟中，等待 X1(a0) 逾時！");
-                    }
-                    await Task.Run(() => _comm.ForceCoil(1, false));
-
-                    AppendLog("INFO", "翻轉步驟順利完成，準備進行移料。");
+                    AppendLog("INFO", "X11 為 OFF，執行翻轉步驟...");
+                    await ExecuteFlipSequenceAsync();
                 }
 
                 // 4. 移料步驟
-                // 3-1. Y3 on (C+) 直到 X4 off
-                AppendLog("INFO", "移料步驟 [1/6]: Y3 on (C+)...");
-                await Task.Run(() => {
-                    _comm.ForceCoil(3, true);
-                    _comm.ForceCoil(4, false);
-                });
-                AppendLog("INFO", "等待 X4 off (c0離去)...");
-                if (!await WaitForInputStateAsync(4, false, 15))
-                {
-                    throw new Exception("移料步驟中，等待 X4 off 逾時！");
-                }
-                await Task.Run(() => _comm.ForceCoil(3, false));
+                await ExecuteMoveMaterialSequenceAsync();
 
-                // 3-2. Y2 持續 ON 
-                AppendLog("INFO", "移料步驟 [2/6]: Y2 (B+) 持續 ON...");
-                await Task.Run(() => _comm.ForceCoil(2, true));
-
-                // 3-3. 等待 X2 on
-                AppendLog("INFO", "移料步驟 [3/6]: 等待 X2 為 true...");
-                if (!await WaitForInputStateAsync(2, true, 15))
-                {
-                    throw new Exception("移料步驟中，等待 X2 逾時！");
-                }
-
-                // 3-4. 當 X2 on，Y5 on (D+ / M+) 直到 X5 on (ps1)
-                AppendLog("INFO", "移料步驟 [4/6]: Y5 on (D+)...");
-                await Task.Run(() => {
-                    _comm.ForceCoil(5, true);
-                    _comm.ForceCoil(8, false); // Y10 off
-                });
-                AppendLog("INFO", "等待極限開關 X5(ps1) 為 true...");
-                if (!await WaitForInputStateAsync(5, true, 15))
-                {
-                    throw new Exception("移料步驟中，等待 X5(ps1) 逾時！");
-                }
-                await Task.Run(() => _comm.ForceCoil(5, false));
-
-                // 3-5. 當 X5 on，Y4 on (C-) 直到 X4 off
-                AppendLog("INFO", "移料步驟 [5/6]: Y4 on (C-)...");
-                await Task.Run(() => {
-                    _comm.ForceCoil(4, true);
-                    _comm.ForceCoil(3, false);
-                });
-                AppendLog("INFO", "等待 X4 off (c0離去)...");
-                if (!await WaitForInputStateAsync(4, false, 15))
-                {
-                    throw new Exception("移料步驟中，等待 X4 off 逾時！");
-                }
-                await Task.Run(() => _comm.ForceCoil(4, false));
-
-                // 3-6. 當 X4 off 時，Y2 off (B-)
-                AppendLog("INFO", "移料步驟 [6/6]: Y2 (B+) off...");
-                await Task.Run(() => _comm.ForceCoil(2, false));
-
-                // 3-7. 等待 X3 on，Y10 on (D-) 直到 X5 off
-                AppendLog("INFO", "等待 X3(b0) 為 true...");
-                if (!await WaitForInputStateAsync(3, true, 15))
-                {
-                    throw new Exception("移料步驟中，等待 X3(b0) 逾時！");
-                }
-                AppendLog("INFO", "移料完成釋放：Y10 on (D-)...");
-                await Task.Run(() => {
-                    _comm.ForceCoil(8, true); // Y10 (放)
-                    _comm.ForceCoil(5, false); // Y5 off
-                });
-                AppendLog("INFO", "等待 X5(ps1) 復歸變為 false...");
-                if (!await WaitForInputStateAsync(5, false, 15))
-                {
-                    throw new Exception("移料步驟中，等待 X5(ps1) 復歸逾時！");
-                }
-                await Task.Run(() => _comm.ForceCoil(8, false));
-
-                // 5. 結束 Y15 背景閃爍
+                // 5. 結束作業，關閉 Y15 閃爍，點亮 Y17
                 if (blinkCts != null)
                 {
                     blinkCts.Cancel();
@@ -1787,87 +1665,54 @@ Y17 綠待機"
                     blinkCts = null;
                 }
 
-                // 正常完成，點亮綠燈 GL (Y17)，熄滅紅燈 (Y15)
-                AppendLog("INFO", "單一作業結束: 點亮待機綠燈 (Y17)，熄滅運轉紅燈 (Y15)...");
+                AppendLog("INFO", "單一作業結束，點亮待機綠燈 (Y17)，熄滅紅燈 (Y15)...");
                 await Task.Run(() => {
-                    _comm.ForceCoil(13, false); // Y15 RL off
-                    _comm.ForceCoil(15, true);  // Y17 GL on
+                    _comm.ForceCoil(13, false);
+                    _comm.ForceCoil(15, true);
                 });
 
                 AppendLog("INFO", "=== 單一作業流程成功執行完畢 ===");
-                MessageBox.Show("單一作業已成功執行完畢！機構已回到待機狀態。", "單一作業成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("單一作業已成功執行完畢！", "作業成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
                 AppendLog("ERROR", $"單一作業中斷: {ex.Message}");
-                MessageBox.Show($"單一作業執行失敗：\n{ex.Message}", "單一作業中斷", MessageBoxButtons.OK, MessageBoxIcon.Error);
-
+                MessageBox.Show($"單一作業執行失敗：\n{ex.Message}", "作業中斷", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 if (blinkCts != null)
                 {
                     blinkCts.Cancel();
                     blinkCts.Dispose();
                     blinkCts = null;
                 }
-
-                // 安全機制：發生錯誤時，強制將所有相關的輸出關閉
-                try
-                {
-                    await Task.Run(() =>
-                    {
-                        _comm.ForceCoil(0, false);
-                        _comm.ForceCoil(1, false);
-                        _comm.ForceCoil(2, false);
-                        _comm.ForceCoil(3, false);
-                        _comm.ForceCoil(4, false);
-                        _comm.ForceCoil(5, false);
-                        _comm.ForceCoil(6, false);
-                        _comm.ForceCoil(7, false); // Y7
-                        _comm.ForceCoil(8, false); // Y10
-                        
-                        _comm.ForceCoil(13, false); // RL off
-                        _comm.ForceCoil(15, true);  // GL on (待機)
-                    });
-                }
-                catch { }
+                await RunSafeShutdownAsync();
             }
             finally
             {
-                if (blinkCts != null)
-                {
-                    blinkCts.Cancel();
-                    blinkCts.Dispose();
-                }
-
-                // 恢復 UI 按鈕狀態
-                if (_comm != null && _comm.IsOpen)
-                {
-                    btnRunSequence.Enabled = true;
-                    btnStartFlow.Enabled = true;
-                    txtSequence.Enabled = true;
-
-                    bool isQ2 = (cmbQuestions.SelectedIndex == 2);
-                    btnStandby.Enabled = isQ2;
-                    btnSingleJob.Enabled = isQ2;
-                    btnFlipOnly.Enabled = isQ2;
-                    btnContinuousJob.Enabled = isQ2;
-                }
+                SetControlsEnabled(true);
             }
         }
 
         private async void btnFlipOnly_Click(object sender, EventArgs e)
         {
-            await RunFlipOnlyAsync();
+            if (cmbQuestions.SelectedIndex == 1)
+            {
+                await RunFlipOnlyQ1Async(); // 第1題指定作業
+            }
+            else if (cmbQuestions.SelectedIndex == 2)
+            {
+                await RunFlipOnlyAsync();
+            }
         }
 
         private async Task RunFlipOnlyAsync()
         {
-            // 前提檢查：必須在綠燈待機 (Y17 on) 且有進料 (X10 on) 狀態下才能執行
+            // 執行前提：Y17 ON 且 X10 ON
             bool isY17On = pnlGL.Tag != null && (bool)pnlGL.Tag;
             bool isX10On = _xLeds[8].Tag != null && (bool)_xLeds[8].Tag;
 
             if (!isY17On || !isX10On)
             {
-                MessageBox.Show("無法執行指定作業！\n前提條件：必須在綠燈待機 (Y17 為 ON) 且有進料 (X10 為 ON) 狀態下才能執行！", "前提條件不符", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("無法執行指定作業！\n前提條件：必須在綠燈待機 (Y17 ON) 且有進料 (X10 ON) 狀態下才能執行！", "前提條件不符", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -1877,149 +1722,46 @@ Y17 綠待機"
                 return;
             }
 
-            // 停用 UI 控制項
-            btnRunSequence.Enabled = false;
-            btnStandby.Enabled = false;
-            btnSingleJob.Enabled = false;
-            btnFlipOnly.Enabled = false;
-            btnContinuousJob.Enabled = false;
-            btnStartFlow.Enabled = false;
-            txtSequence.Enabled = false;
-
+            SetControlsEnabled(false);
             AppendLog("INFO", "=== 開始執行指定作業流程 ===");
             CancellationTokenSource blinkCts = null;
 
             try
             {
-                // Y17 off, Y15 開始閃爍 (每秒一次 on/off)
-                AppendLog("INFO", "指定作業 [1/9]: 熄滅待機綠燈 (Y17)，啟動運轉紅燈 (Y15) 閃爍服務...");
+                // Y17 off, Y15 開始閃爍 (每秒一次)
                 await Task.Run(() => _comm.ForceCoil(15, false));
-
                 blinkCts = new CancellationTokenSource();
                 CancellationToken token = blinkCts.Token;
                 _ = Task.Run(async () => {
                     try
                     {
-                        bool y15State = true;
+                        bool state = true;
                         while (!token.IsCancellationRequested)
                         {
-                            _comm.ForceCoil(13, y15State);
-                            y15State = !y15State;
+                            _comm.ForceCoil(13, state);
+                            state = !state;
                             await Task.Delay(500, token);
                         }
                     }
-                    catch (TaskCanceledException) { }
-                    catch (Exception ex)
-                    {
-                        AppendLog("ERROR", $"指定作業紅燈閃爍出錯: {ex.Message}");
-                    }
+                    catch { }
                 }, token);
 
-                // Y2 off (B-), 等待退回 X3
-                AppendLog("INFO", "指定作業 [2/9]: Y2 off...");
-                await Task.Run(() => _comm.ForceCoil(2, false));
-                AppendLog("INFO", "等待 B缸退回到 X3(b0) 為 true...");
-                if (!await WaitForInputStateAsync(3, true, 15))
-                {
-                    throw new Exception("等待 X3(b0) 逾時！");
-                }
+                // 2. 執行翻轉
+                await ExecuteFlipSequenceAsync();
 
-                // Y3 on (C+) 直到 X4 off
-                AppendLog("INFO", "指定作業 [3/9]: Y3 on (C+)...");
-                await Task.Run(() => {
-                    _comm.ForceCoil(3, true);
-                    _comm.ForceCoil(4, false);
-                });
-                AppendLog("INFO", "等待 X4 off (c0離去)...");
-                if (!await WaitForInputStateAsync(4, false, 15))
-                {
-                    throw new Exception("等待 X4 off 逾時！");
-                }
-                await Task.Run(() => _comm.ForceCoil(3, false));
-
-                // T1 (暫停 1 秒)
-                AppendLog("INFO", "指定作業 [4/9]: 暫停 1 秒...");
-                await Task.Delay(1000);
-
-                // Y0 on (A+) 直到 X0 on
-                AppendLog("INFO", "指定作業 [5/9]: Y0 on (A+)...");
-                await Task.Run(() => {
-                    _comm.ForceCoil(0, true);
-                    _comm.ForceCoil(1, false);
-                });
-                AppendLog("INFO", "等待 X0(a1) 為 true...");
-                if (!await WaitForInputStateAsync(0, true, 15))
-                {
-                    throw new Exception("等待 X0(a1) 逾時！");
-                }
-                await Task.Run(() => _comm.ForceCoil(0, false));
-
-                // 旋轉判斷 X6 / X7
-                bool isX6 = _xLeds[6].Tag != null && (bool)_xLeds[6].Tag;
-                bool isX7 = _xLeds[7].Tag != null && (bool)_xLeds[7].Tag;
-
-                if (isX6)
-                {
-                    AppendLog("INFO", "指定翻轉 [6/9] [X6 on]: 執行 Y7 on 直到 X7 on...");
-                    await Task.Run(() => {
-                        _comm.ForceCoil(7, true);
-                        _comm.ForceCoil(6, false);
-                    });
-                    if (!await WaitForInputStateAsync(7, true, 15))
-                    {
-                        throw new Exception("等待 X7 逾時！");
-                    }
-                    await Task.Run(() => _comm.ForceCoil(7, false));
-                }
-                else if (isX7)
-                {
-                    AppendLog("INFO", "指定翻轉 [6/9] [X7 on]: 執行 Y6 on 直到 X6 on...");
-                    await Task.Run(() => {
-                        _comm.ForceCoil(6, true);
-                        _comm.ForceCoil(7, false);
-                    });
-                    if (!await WaitForInputStateAsync(6, true, 15))
-                    {
-                        throw new Exception("等待 X6 逾時！");
-                    }
-                    await Task.Run(() => _comm.ForceCoil(6, false));
-                }
-                else
-                {
-                    AppendLog("WARNING", "指定翻轉 [6/9]: 未偵測到 X6 或 X7，略過方向旋轉。");
-                }
-
-                // T1 (暫停 1 秒)
-                AppendLog("INFO", "指定翻轉 [7/9]: 暫停 1 秒...");
-                await Task.Delay(1000);
-
-                // Y1 on (A-) 直到 X1 on
-                AppendLog("INFO", "指定翻轉 [8/9]: Y1 on (A-)...");
-                await Task.Run(() => {
-                    _comm.ForceCoil(1, true);
-                    _comm.ForceCoil(0, false);
-                });
-                AppendLog("INFO", "等待 X1(a0) 為 true...");
-                if (!await WaitForInputStateAsync(1, true, 15))
-                {
-                    throw new Exception("等待 X1(a0) 逾時！");
-                }
-                await Task.Run(() => _comm.ForceCoil(1, false));
-
-                // Y4 on (C-), 復歸到 c0 (X4 on)
-                AppendLog("INFO", "指定翻轉 [9/9]: Y4 on (C-)...");
+                // 3. Y4 ON 復歸夾具 (C-)
+                AppendLog("INFO", "指定作業 [最後]: Y4 ON (C-)，等待 X4(c0) ON...");
                 await Task.Run(() => {
                     _comm.ForceCoil(4, true);
                     _comm.ForceCoil(3, false);
                 });
-                AppendLog("INFO", "等待 X4(c0) 為 true...");
                 if (!await WaitForInputStateAsync(4, true, 15))
                 {
-                    throw new Exception("等待 X4(c0) 逾時！");
+                    throw new Exception("等待 X4(c0) ON 逾時！");
                 }
                 await Task.Run(() => _comm.ForceCoil(4, false));
 
-                // 正常結束，停止閃爍並還原燈號
+                // 結束閃爍，還原燈號
                 if (blinkCts != null)
                 {
                     blinkCts.Cancel();
@@ -2027,84 +1769,54 @@ Y17 綠待機"
                     blinkCts = null;
                 }
 
-                AppendLog("INFO", "翻轉結束: 點亮待機綠燈 (Y17)，關閉紅燈 (Y15)...");
+                AppendLog("INFO", "指定作業結束，點亮待機綠燈 (Y17)，關閉紅燈 (Y15)...");
                 await Task.Run(() => {
-                    _comm.ForceCoil(13, false); // Y15 off
-                    _comm.ForceCoil(15, true);  // Y17 on
+                    _comm.ForceCoil(13, false);
+                    _comm.ForceCoil(15, true);
                 });
 
-                AppendLog("INFO", "=== 指定翻轉流程成功執行完畢 ===");
-                MessageBox.Show("指定翻轉流程已成功執行完畢！", "指定翻轉成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                AppendLog("INFO", "=== 指定作業流程成功執行完畢 ===");
+                MessageBox.Show("指定作業已成功執行完畢！", "指定作業成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                AppendLog("ERROR", $"指定翻轉中斷: {ex.Message}");
-                MessageBox.Show($"指定翻轉執行失敗：\n{ex.Message}", "指定翻轉中斷", MessageBoxButtons.OK, MessageBoxIcon.Error);
-
+                AppendLog("ERROR", $"指定作業中斷: {ex.Message}");
+                MessageBox.Show($"指定作業執行失敗：\n{ex.Message}", "作業中斷", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 if (blinkCts != null)
                 {
                     blinkCts.Cancel();
                     blinkCts.Dispose();
                     blinkCts = null;
                 }
-
-                // 安全機制：發生錯誤時，強制將所有相關的輸出關閉
-                try
-                {
-                    await Task.Run(() =>
-                    {
-                        _comm.ForceCoil(0, false);
-                        _comm.ForceCoil(1, false);
-                        _comm.ForceCoil(2, false);
-                        _comm.ForceCoil(3, false);
-                        _comm.ForceCoil(4, false);
-                        _comm.ForceCoil(5, false);
-                        _comm.ForceCoil(6, false);
-                        _comm.ForceCoil(7, false);
-                        _comm.ForceCoil(8, false);
-                        
-                        _comm.ForceCoil(13, false); // RL off
-                        _comm.ForceCoil(15, true);  // GL on
-                    });
-                }
-                catch { }
+                await RunSafeShutdownAsync();
             }
             finally
             {
-                if (blinkCts != null)
-                {
-                    blinkCts.Cancel();
-                    blinkCts.Dispose();
-                }
-
-                // 恢復 UI 按鈕狀態
-                if (_comm != null && _comm.IsOpen)
-                {
-                    btnRunSequence.Enabled = true;
-                    btnStandby.Enabled = true;
-                    btnSingleJob.Enabled = true;
-                    btnFlipOnly.Enabled = true;
-                    btnContinuousJob.Enabled = true;
-                    btnStartFlow.Enabled = true;
-                    txtSequence.Enabled = true;
-                }
+                SetControlsEnabled(true);
             }
         }
 
         private async void btnContinuousJob_Click(object sender, EventArgs e)
         {
-            await RunContinuousJobAsync();
+            if (cmbQuestions.SelectedIndex == 1)
+            {
+                await RunJobQ1Async(true); // 第1題連續作業
+            }
+            else if (cmbQuestions.SelectedIndex == 2)
+            {
+                await RunContinuousJobAsync();
+            }
         }
 
         private async Task RunContinuousJobAsync()
         {
-            // 前提檢查：必須在綠燈待機 (Y17 on) 且有進料 (X10 on) 狀態下才能執行
+            // 執行前提：Y17 ON 且 X10 ON
             bool isY17On = pnlGL.Tag != null && (bool)pnlGL.Tag;
             bool isX10On = _xLeds[8].Tag != null && (bool)_xLeds[8].Tag;
 
             if (!isY17On || !isX10On)
             {
-                MessageBox.Show("無法執行連續作業！\n前提條件：必須在綠燈待機 (Y17 為 ON) 且有進料 (X10 為 ON) 狀態下才能執行！", "前提條件不符", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show("無法執行連續作業！\n前提條件：必須在綠燈待機 (Y17 ON) 且有進料 (X10 ON) 狀態下才能執行！", "前提條件不符", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -2114,15 +1826,7 @@ Y17 綠待機"
                 return;
             }
 
-            // 停用 UI 控制項
-            btnRunSequence.Enabled = false;
-            btnStandby.Enabled = false;
-            btnSingleJob.Enabled = false;
-            btnFlipOnly.Enabled = false;
-            btnContinuousJob.Enabled = false;
-            btnStartFlow.Enabled = false;
-            txtSequence.Enabled = false;
-
+            SetControlsEnabled(false);
             AppendLog("INFO", "=== 開始執行連續作業流程 ===");
             CancellationTokenSource blinkCts = null;
 
@@ -2130,219 +1834,62 @@ Y17 綠待機"
             {
                 while (true)
                 {
-                    // 1. Y17 off (綠燈熄), Y15 on (紅燈亮)
-                    AppendLog("INFO", "連續作業迴圈啟動: 點亮運轉紅燈 (Y15)，熄滅待機綠燈 (Y17)...");
+                    // 1. Y17 off, Y15 on
                     await Task.Run(() => {
-                        _comm.ForceCoil(15, false); // Y17 GL off
-                        _comm.ForceCoil(13, true);  // Y15 RL on
+                        _comm.ForceCoil(15, false); // GL off
+                        _comm.ForceCoil(13, true);  // RL on
                     });
 
-                    // 2. 判斷 X10 (s0進料，十進位 index 8)
-                    bool isX10 = _xLeds[8].Tag != null && (bool)_xLeds[8].Tag;
-                    if (isX10)
+                    // 2. 判斷 X12 (顏色)
+                    bool isX12 = _xLeds[10].Tag != null && (bool)_xLeds[10].Tag;
+                    if (!isX12)
                     {
-                        // 判斷 X12 (s2重量下/顏色紅黑，十進位 index 10)
-                        bool isX12 = _xLeds[10].Tag != null && (bool)_xLeds[10].Tag;
-                        if (!isX12)
+                        AppendLog("INFO", "偵測到 X12 為 OFF (黑色料)，啟用 Y15 閃爍...");
+                        if (blinkCts == null)
                         {
-                            AppendLog("INFO", "偵測到 X12 (顏色紅黑) 為 OFF (黑色料)，啟用 Y15 閃爍 (每秒一次 on/off)。");
                             blinkCts = new CancellationTokenSource();
                             CancellationToken token = blinkCts.Token;
                             _ = Task.Run(async () => {
                                 try
                                 {
-                                    bool y15State = true;
+                                    bool state = true;
                                     while (!token.IsCancellationRequested)
                                     {
-                                        _comm.ForceCoil(13, y15State);
-                                        y15State = !y15State;
+                                        _comm.ForceCoil(13, state);
+                                        state = !state;
                                         await Task.Delay(500, token);
                                     }
                                 }
-                                catch (TaskCanceledException) { }
-                                catch (Exception ex)
-                                {
-                                    AppendLog("ERROR", $"Y15 閃爍背景服務出錯: {ex.Message}");
-                                }
+                                catch { }
                             }, token);
                         }
-                        else
-                        {
-                            AppendLog("INFO", "偵測到 X12 (顏色紅黑) 為 ON (紅色料)，Y15 保持恆亮。");
-                        }
-                    }
-
-                    // 3. 判斷 X11 (重量上，十進位 index 9)
-                    bool isX11 = _xLeds[9].Tag != null && (bool)_xLeds[9].Tag;
-                    if (isX11)
-                    {
-                        AppendLog("INFO", "條件分支：X11 (重量上) 為 ON，直接進行移料步驟。");
                     }
                     else
                     {
-                        AppendLog("INFO", "條件分支：X11 (重量上) 為 OFF，開始執行翻轉步驟。");
-                        
-                        // 執行翻轉步驟
-                        // 3-1. Y2 off (B-)
-                        AppendLog("INFO", "翻轉 [1/5]: Y2 off...");
-                        await Task.Run(() => _comm.ForceCoil(2, false));
-                        AppendLog("INFO", "等待 B缸退回到 X3(b0) 為 true...");
-                        if (!await WaitForInputStateAsync(3, true, 15))
+                        AppendLog("INFO", "偵測到 X12 為 ON (紅色料)，Y15 保持恆亮。");
+                        if (blinkCts != null)
                         {
-                            throw new Exception("翻轉步驟中，等待退回 X3 逾時！");
+                            blinkCts.Cancel();
+                            blinkCts.Dispose();
+                            blinkCts = null;
                         }
+                        await Task.Run(() => _comm.ForceCoil(13, true));
+                    }
 
-                        // 3-2. Y3 on (C+) 直到 X4 off
-                        AppendLog("INFO", "翻轉 [2/5]: Y3 on (C+)...");
-                        await Task.Run(() => {
-                            _comm.ForceCoil(3, true);
-                            _comm.ForceCoil(4, false);
-                        });
-                        AppendLog("INFO", "等待 X4 off (c0離去)...");
-                        if (!await WaitForInputStateAsync(4, false, 15))
-                        {
-                            throw new Exception("翻轉步驟中，等待 X4 off 逾時！");
-                        }
-                        await Task.Run(() => _comm.ForceCoil(3, false));
-
-                        // 3-3. T1 (暫停 1 秒)
-                        AppendLog("INFO", "翻轉 [3/5]: 暫停 1 秒...");
-                        await Task.Delay(1000);
-
-                        // 3-4. Y0 on (A+) 直到 X0 on
-                        AppendLog("INFO", "翻轉 [4/5]: Y0 on (A+)...");
-                        await Task.Run(() => {
-                            _comm.ForceCoil(0, true);
-                            _comm.ForceCoil(1, false);
-                        });
-                        AppendLog("INFO", "等待 X0(a1) 為 true...");
-                        if (!await WaitForInputStateAsync(0, true, 15))
-                        {
-                            throw new Exception("翻轉步驟中，等待 X0(a1) 逾時！");
-                        }
-                        await Task.Run(() => _comm.ForceCoil(0, false));
-
-                        // 3-5. 判斷 X6/X7 進行旋轉
-                        bool isX6 = _xLeds[6].Tag != null && (bool)_xLeds[6].Tag;
-                        bool isX7 = _xLeds[7].Tag != null && (bool)_xLeds[7].Tag;
-
-                        if (isX6)
-                        {
-                            AppendLog("INFO", "翻轉分支 [X6 on]: 執行 Y7 on 直到 X7 on...");
-                            await Task.Run(() => {
-                                _comm.ForceCoil(7, true);
-                                _comm.ForceCoil(6, false);
-                            });
-                            if (!await WaitForInputStateAsync(7, true, 15))
-                            {
-                                throw new Exception("翻轉分支 [X6] 等待 X7 逾時！");
-                            }
-                            await Task.Run(() => _comm.ForceCoil(7, false));
-                        }
-                        else if (isX7)
-                        {
-                            AppendLog("INFO", "翻轉分支 [X7 on]: 執行 Y6 on 直到 X6 on...");
-                            await Task.Run(() => {
-                                _comm.ForceCoil(6, true);
-                                _comm.ForceCoil(7, false);
-                            });
-                            if (!await WaitForInputStateAsync(6, true, 15))
-                            {
-                                throw new Exception("翻轉分支 [X7] 等待 X6 逾時！");
-                            }
-                            await Task.Run(() => _comm.ForceCoil(6, false));
-                        }
-
-                        // 3-6. 暫停 1 秒 (T1) 
-                        AppendLog("INFO", "翻轉後等待: 暫停 1 秒...");
-                        await Task.Delay(1000);
-
-                        // 3-7. Y1 on (A-) 直到 X1 on
-                        AppendLog("INFO", "翻轉 [5/5]: Y1 on (A-)...");
-                        await Task.Run(() => {
-                            _comm.ForceCoil(1, true);
-                            _comm.ForceCoil(0, false);
-                        });
-                        AppendLog("INFO", "等待 X1(a0) 為 true...");
-                        if (!await WaitForInputStateAsync(1, true, 15))
-                        {
-                            throw new Exception("翻轉步驟中，等待 X1(a0) 逾時！");
-                        }
-                        await Task.Run(() => _comm.ForceCoil(1, false));
+                    // 3. 判斷 X11 (姿勢)
+                    bool isX11 = _xLeds[9].Tag != null && (bool)_xLeds[9].Tag;
+                    if (isX11)
+                    {
+                        AppendLog("INFO", "X11 為 ON，直接進入移料步驟。");
+                    }
+                    else
+                    {
+                        AppendLog("INFO", "X11 為 OFF，執行翻轉步驟...");
+                        await ExecuteFlipSequenceAsync();
                     }
 
                     // 4. 移料步驟
-                    // 4-1. Y3 on (C+) 直到 X4 off
-                    AppendLog("INFO", "移料步驟 [1/6]: Y3 on (C+)...");
-                    await Task.Run(() => {
-                        _comm.ForceCoil(3, true);
-                        _comm.ForceCoil(4, false);
-                    });
-                    AppendLog("INFO", "等待 X4 off (c0離去)...");
-                    if (!await WaitForInputStateAsync(4, false, 15))
-                    {
-                        throw new Exception("移料步驟中，等待 X4 off 逾時！");
-                    }
-                    await Task.Run(() => _comm.ForceCoil(3, false));
-
-                    // 4-2. Y2 持續 ON 
-                    AppendLog("INFO", "移料步驟 [2/6]: Y2 (B+) 持續 ON...");
-                    await Task.Run(() => _comm.ForceCoil(2, true));
-
-                    // 4-3. 等待 X2 on
-                    AppendLog("INFO", "移料步驟 [3/6]: 等待 X2 為 true...");
-                    if (!await WaitForInputStateAsync(2, true, 15))
-                    {
-                        throw new Exception("移料步驟中，等待 X2 逾時！");
-                    }
-
-                    // 4-4. 當 X2 on，Y5 on (D+) 直到 X5 on (ps1)
-                    AppendLog("INFO", "移料步驟 [4/6]: Y5 on (D+)...");
-                    await Task.Run(() => {
-                        _comm.ForceCoil(5, true);
-                        _comm.ForceCoil(8, false); // Y10 off
-                    });
-                    AppendLog("INFO", "等待極限開關 X5(ps1) 為 true...");
-                    if (!await WaitForInputStateAsync(5, true, 15))
-                    {
-                        throw new Exception("移料步驟中，等待 X5(ps1) 逾時！");
-                    }
-                    await Task.Run(() => _comm.ForceCoil(5, false));
-
-                    // 4-5. 當 X5 on，Y4 on (C-) 直到 X4 off
-                    AppendLog("INFO", "移料步驟 [5/6]: Y4 on (C-)...");
-                    await Task.Run(() => {
-                        _comm.ForceCoil(4, true);
-                        _comm.ForceCoil(3, false);
-                    });
-                    AppendLog("INFO", "等待 X4 off (c0離去)...");
-                    if (!await WaitForInputStateAsync(4, false, 15))
-                    {
-                        throw new Exception("移料步驟中，等待 X4 off 逾時！");
-                    }
-                    await Task.Run(() => _comm.ForceCoil(4, false));
-
-                    // 4-6. 當 X4 off 時，Y2 off (B-)
-                    AppendLog("INFO", "移料步驟 [6/6]: Y2 (B+) off...");
-                    await Task.Run(() => _comm.ForceCoil(2, false));
-
-                    // 4-7. 等待 X3 on，Y10 on (D-) 直到 X5 off
-                    AppendLog("INFO", "等待 X3(b0) 為 true...");
-                    if (!await WaitForInputStateAsync(3, true, 15))
-                    {
-                        throw new Exception("移料步驟中，等待 X3(b0) 逾時！");
-                    }
-                    AppendLog("INFO", "移料完成釋放：Y10 on (D-)...");
-                    await Task.Run(() => {
-                        _comm.ForceCoil(8, true); // Y10 (放)
-                        _comm.ForceCoil(5, false); // Y5 off
-                    });
-                    AppendLog("INFO", "等待 X5(ps1) 復歸變為 false...");
-                    if (!await WaitForInputStateAsync(5, false, 15))
-                    {
-                        throw new Exception("移料步驟中，等待 X5(ps1) 復歸逾時！");
-                    }
-                    await Task.Run(() => _comm.ForceCoil(8, false));
+                    await ExecuteMoveMaterialSequenceAsync();
 
                     // 5. 移料完成後，先關閉閃爍，恢復 Y15 恆亮
                     if (blinkCts != null)
@@ -2351,28 +1898,28 @@ Y17 綠待機"
                         blinkCts.Dispose();
                         blinkCts = null;
                     }
-                    await Task.Run(() => _comm.ForceCoil(13, true)); // Y15 on 恆亮
+                    await Task.Run(() => _comm.ForceCoil(13, true)); // 恢復恆亮
 
-                    // 6. 監控 X10 狀態
+                    // 6. 監控 X10 進料狀態
                     AppendLog("INFO", "本輪連續作業移料完成。開始監控 X10 進料狀態...");
                     bool nextRound = false;
                     bool isX10Now = _xLeds[8].Tag != null && (bool)_xLeds[8].Tag;
 
                     if (isX10Now)
                     {
-                        AppendLog("INFO", "X10 已為 ON，暫停 3 秒 (T3) 後重複連續作業動作。");
+                        AppendLog("INFO", "X10 已為 ON，暫停 3 秒 (T3) 後重複連續作業。");
                         await Task.Delay(3000);
                         nextRound = true;
                     }
                     else
                     {
-                        AppendLog("INFO", "X10 為 OFF，啟動 10 秒進料等待。");
+                        AppendLog("INFO", "X10 為 OFF，啟動 10 秒進料等待...");
                         for (int i = 0; i < 100; i++) // 100 * 100ms = 10秒
                         {
                             await Task.Delay(100);
                             if (_xLeds[8].Tag != null && (bool)_xLeds[8].Tag)
                             {
-                                AppendLog("INFO", "在 10 秒內偵測到 X10 變為 ON！暫停 3 秒 (T3) 後重複連續作業動作。");
+                                AppendLog("INFO", "在 10 秒內偵測到進料 (X10 ON)！暫停 3 秒 (T3) 後重複連續作業。");
                                 await Task.Delay(3000);
                                 nextRound = true;
                                 break;
@@ -2382,13 +1929,13 @@ Y17 綠待機"
 
                     if (!nextRound)
                     {
-                        AppendLog("INFO", "連續作業結束：超過 10 秒 X10 仍為 OFF。熄滅運轉燈，點亮待機綠燈...");
+                        AppendLog("INFO", "連續作業結束：超過 10 秒無進料 (X10 OFF)。熄滅運轉燈，點亮待機綠燈...");
                         await Task.Run(() => {
-                            _comm.ForceCoil(13, false); // Y15 off
-                            _comm.ForceCoil(15, true);  // Y17 on
+                            _comm.ForceCoil(13, false); // RL off
+                            _comm.ForceCoil(15, true);  // GL on (待機)
                         });
-                        MessageBox.Show("連續作業因超過 10 秒無進料 (X10 off) 而自動結束並復歸待機狀態。", "連續作業結束", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        break; // 跳出 while (true) 迴圈，結束任務
+                        MessageBox.Show("連續作業因超過 10 秒無進料而自動結束並復歸待機狀態。", "連續作業結束", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        break; // 退出迴圈
                     }
                 }
             }
@@ -2396,54 +1943,530 @@ Y17 綠待機"
             {
                 AppendLog("ERROR", $"連續作業中斷: {ex.Message}");
                 MessageBox.Show($"連續作業執行失敗：\n{ex.Message}", "連續作業中斷", MessageBoxButtons.OK, MessageBoxIcon.Error);
-
                 if (blinkCts != null)
                 {
                     blinkCts.Cancel();
                     blinkCts.Dispose();
                     blinkCts = null;
                 }
-
-                // 安全機制：發生錯誤時，強制將所有相關的輸出關閉
-                try
-                {
-                    await Task.Run(() =>
-                    {
-                        _comm.ForceCoil(0, false);
-                        _comm.ForceCoil(1, false);
-                        _comm.ForceCoil(2, false);
-                        _comm.ForceCoil(3, false);
-                        _comm.ForceCoil(4, false);
-                        _comm.ForceCoil(5, false);
-                        _comm.ForceCoil(6, false);
-                        _comm.ForceCoil(7, false); // Y7
-                        _comm.ForceCoil(8, false); // Y10
-                        
-                        _comm.ForceCoil(13, false); // RL off
-                        _comm.ForceCoil(15, true);  // GL on (待機)
-                    });
-                }
-                catch { }
+                await RunSafeShutdownAsync();
             }
             finally
             {
-                if (blinkCts != null)
-                {
-                    blinkCts.Cancel();
-                    blinkCts.Dispose();
-                }
+                SetControlsEnabled(true);
+            }
+        }
 
-                // 恢復 UI 按鈕狀態
-                if (_comm != null && _comm.IsOpen)
+        // Q2 翻轉副流程
+        private async Task ExecuteFlipSequenceAsync()
+        {
+            // Y2 off (B-), 等待退回 X3
+            AppendLog("INFO", "翻轉步驟 [1/5]: Y2 OFF...");
+            await Task.Run(() => _comm.ForceCoil(2, false));
+            if (!await WaitForInputStateAsync(3, true, 15))
+            {
+                throw new Exception("等待 B缸退回 X3(b0) 逾時！");
+            }
+
+            // Y3 on (C+) 直到 X4 off
+            AppendLog("INFO", "翻轉步驟 [2/5]: Y3 ON (C+)，等待 X4 OFF...");
+            await Task.Run(() => {
+                _comm.ForceCoil(3, true);
+                _comm.ForceCoil(4, false);
+            });
+            if (!await WaitForInputStateAsync(4, false, 15))
+            {
+                throw new Exception("等待夾具夾緊 X4 OFF 逾時！");
+            }
+            await Task.Run(() => _comm.ForceCoil(3, false));
+
+            // T1 (1秒)
+            AppendLog("INFO", "翻轉步驟 [3/5]: 暫停 1 秒...");
+            await Task.Delay(1000);
+
+            // Y0 on (A+) 直到 X0 on
+            AppendLog("INFO", "翻轉步驟 [4/5]: Y0 ON (A+)，等待 X0 ON...");
+            await Task.Run(() => {
+                _comm.ForceCoil(0, true);
+                _comm.ForceCoil(1, false);
+            });
+            if (!await WaitForInputStateAsync(0, true, 15))
+            {
+                throw new Exception("等待 A缸頂起 X0(a1) ON 逾時！");
+            }
+            await Task.Run(() => _comm.ForceCoil(0, false));
+
+            // 旋轉判斷 X6 / X7
+            bool isX6 = _xLeds[6].Tag != null && (bool)_xLeds[6].Tag;
+            bool isX7 = _xLeds[7].Tag != null && (bool)_xLeds[7].Tag;
+
+            if (isX6)
+            {
+                AppendLog("INFO", "翻轉分支 [X6 ON]: Y7 ON，等待 X7 ON...");
+                await Task.Run(() => {
+                    _comm.ForceCoil(7, true);
+                    _comm.ForceCoil(6, false);
+                });
+                if (!await WaitForInputStateAsync(7, true, 15))
                 {
-                    btnRunSequence.Enabled = true;
-                    btnStandby.Enabled = true;
-                    btnSingleJob.Enabled = true;
-                    btnFlipOnly.Enabled = true;
-                    btnContinuousJob.Enabled = true;
-                    btnStartFlow.Enabled = true;
-                    txtSequence.Enabled = true;
+                    throw new Exception("旋轉等待 X7 逾時！");
                 }
+                await Task.Run(() => _comm.ForceCoil(7, false));
+            }
+            else if (isX7)
+            {
+                AppendLog("INFO", "翻轉分支 [X7 ON]: Y6 ON，等待 X6 ON...");
+                await Task.Run(() => {
+                    _comm.ForceCoil(6, true);
+                    _comm.ForceCoil(7, false);
+                });
+                if (!await WaitForInputStateAsync(6, true, 15))
+                {
+                    throw new Exception("旋轉等待 X6 逾時！");
+                }
+                await Task.Run(() => _comm.ForceCoil(6, false));
+            }
+            else
+            {
+                AppendLog("WARNING", "未偵測到 X6 或 X7 ON，略過旋轉步驟。");
+            }
+
+            // T1 (1秒)
+            AppendLog("INFO", "翻轉後等待: 暫停 1 秒...");
+            await Task.Delay(1000);
+
+            // Y1 on (A-) 直到 X1 on
+            AppendLog("INFO", "翻轉步驟 [5/5]: Y1 ON (A-)，等待 X1 ON...");
+            await Task.Run(() => {
+                _comm.ForceCoil(1, true);
+                _comm.ForceCoil(0, false);
+            });
+            if (!await WaitForInputStateAsync(1, true, 15))
+            {
+                throw new Exception("等待 A缸退回 X1(a0) ON 逾時！");
+            }
+            await Task.Run(() => _comm.ForceCoil(1, false));
+
+            AppendLog("INFO", "翻轉子流程順利執行完畢。");
+        }
+
+        // Q2 移料副流程
+        private async Task ExecuteMoveMaterialSequenceAsync()
+        {
+            // Y3 on (C+) 直到 X4 off
+            AppendLog("INFO", "移料步驟 [1/6]: Y3 ON (C+)，等待 X4 OFF...");
+            await Task.Run(() => {
+                _comm.ForceCoil(3, true);
+                _comm.ForceCoil(4, false);
+            });
+            if (!await WaitForInputStateAsync(4, false, 15))
+            {
+                throw new Exception("等待夾緊 X4 OFF 逾時！");
+            }
+            await Task.Run(() => _comm.ForceCoil(3, false));
+
+            // Y2 持續 ON
+            AppendLog("INFO", "移料步驟 [2/6]: Y2 (B+) 持續 ON...");
+            await Task.Run(() => _comm.ForceCoil(2, true));
+
+            // 等待 X2 on
+            AppendLog("INFO", "移料步驟 [3/6]: 等待 B缸到位 X2 ON...");
+            if (!await WaitForInputStateAsync(2, true, 15))
+            {
+                throw new Exception("等待 X2 ON 逾時！");
+            }
+
+            // 當 X2 on，Y5 on (D+) 直到 X5 on (ps1)
+            AppendLog("INFO", "移料步驟 [4/6]: Y5 ON (D+)，等待真空吸附 X5(ps1) ON...");
+            await Task.Run(() => {
+                _comm.ForceCoil(5, true);
+                _comm.ForceCoil(8, false); // Y10 off
+            });
+            if (!await WaitForInputStateAsync(5, true, 15))
+            {
+                throw new Exception("等待吸住 X5 ON 逾時！");
+            }
+            await Task.Run(() => _comm.ForceCoil(5, false));
+
+            // 當 X5 on，Y4 on (C-) 直到 X4 off
+            AppendLog("INFO", "移料步驟 [5/6]: Y4 ON (C-) 釋放夾具，等待 X4 OFF...");
+            await Task.Run(() => {
+                _comm.ForceCoil(4, true);
+                _comm.ForceCoil(3, false);
+            });
+            if (!await WaitForInputStateAsync(4, false, 15))
+            {
+                throw new Exception("等待夾具離去 X4 OFF 逾時！");
+            }
+            await Task.Run(() => _comm.ForceCoil(4, false));
+
+            // 當 X4 off 時，Y2 off (B-)
+            AppendLog("INFO", "移料步驟 [6/6]: Y2 OFF (B-)...");
+            await Task.Run(() => _comm.ForceCoil(2, false));
+
+            // 等待 X3 on，Y10 on (D-) 直到 X5 off
+            AppendLog("INFO", "等待 B缸回到 X3(b0) ON...");
+            if (!await WaitForInputStateAsync(3, true, 15))
+            {
+                throw new Exception("等待 B缸退回 X3 ON 逾時！");
+            }
+
+            AppendLog("INFO", "移料完畢釋放：Y10 ON (D-)，等待真空釋放 X5 OFF...");
+            await Task.Run(() => {
+                _comm.ForceCoil(8, true); // Y10 ON
+                _comm.ForceCoil(5, false); // Y5 off
+            });
+            if (!await WaitForInputStateAsync(5, false, 15))
+            {
+                throw new Exception("等待真空壓釋放 X5 OFF 逾時！");
+            }
+            await Task.Run(() => _comm.ForceCoil(8, false));
+
+            AppendLog("INFO", "移料子流程順利執行完畢。");
+        }
+
+        // Q1 專屬單一/連續流程
+        private async Task RunJobQ1Async(bool isContinuous)
+        {
+            // 執行前提：Y16 (待機) 為 ON
+            bool isY16On = _yLeds[14].Tag != null && (bool)_yLeds[14].Tag; // Y16 index 14
+            if (!isY16On)
+            {
+                string jobName = isContinuous ? "連續作業" : "單一作業";
+                MessageBox.Show($"無法執行{jobName}！\n前提條件：必須在待機 (Y16 ON) 狀態下才能執行！\n請先進行「復歸」作業。", "前提條件不符", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (_comm == null || !_comm.IsOpen)
+            {
+                MessageBox.Show("請先連線 PLC 才能執行作業！", "未連線", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            SetControlsEnabled(false);
+            string flowName = isContinuous ? "連續作業" : "單一作業";
+            AppendLog("INFO", $"=== 開始執行第 1 題{flowName}流程 ===");
+
+            try
+            {
+                while (true)
+                {
+                    // 1. Y16 off, Y15 on (紅運轉燈亮)
+                    await Task.Run(() => {
+                        _comm.ForceCoil(14, false); // Y16 off
+                        _comm.ForceCoil(13, true);  // Y15 on
+                    });
+
+                    // 2. Y2 on 十秒，若十秒內 X2 on 後再一秒才 Y2 off；若超時則關閉 Y2 並回到待機
+                    AppendLog("INFO", "步驟 [1/5]: Y2 (M1輸送帶) ON，等待 X2 ON (最多等待10秒)...");
+                    await Task.Run(() => _comm.ForceCoil(2, true));
+                    bool x2Success = false;
+                    for (int t = 0; t < 100; t++)
+                    {
+                        await Task.Delay(100);
+                        if (_xLeds[2].Tag != null && (bool)_xLeds[2].Tag)
+                        {
+                            AppendLog("INFO", "偵測到 X2 ON，繼續運轉 1 秒後關閉 Y2...");
+                            await Task.Delay(1000);
+                            x2Success = true;
+                            break;
+                        }
+                    }
+                    await Task.Run(() => _comm.ForceCoil(2, false));
+
+                    if (!x2Success)
+                    {
+                        AppendLog("WARNING", "超過 10 秒未偵測到 X2 ON，作業中斷並退回待機。");
+                        await Task.Run(() => {
+                            _comm.ForceCoil(13, false);
+                            _comm.ForceCoil(14, true);
+                        });
+                        MessageBox.Show("超時無回應 (未於10秒內收到 X2 ON 訊號)！", "作業中斷", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+
+                    // 3. 判斷 X3 狀態決定排料點
+                    bool isX3 = _xLeds[3].Tag != null && (bool)_xLeds[3].Tag; // X3 index 3
+                    int dischargePoint = isX3 ? 5 : 6;
+                    AppendLog("INFO", $"步驟 [2/5]: X3 狀態為 {(isX3 ? "ON" : "OFF")}，排料分流點為 X{dischargePoint}");
+
+                    // 4. Y0 on, X0 on 後 0.5 秒再 Y6 一秒，Y0 off
+                    AppendLog("INFO", "步驟 [3/5]: Y0 (A缸下) ON，等待 X0 ON...");
+                    await Task.Run(() => _comm.ForceCoil(0, true));
+                    if (!await WaitForInputStateAsync(0, true, 15))
+                    {
+                        throw new Exception("等待 X0 ON 逾時！");
+                    }
+                    AppendLog("INFO", "X0 已為 ON，暫停 0.5 秒後開啟夾具 Y6...");
+                    await Task.Delay(500);
+                    AppendLog("INFO", "Y6 (B+夾) ON 保持 1 秒，並關閉 Y0...");
+                    await Task.Run(() => {
+                        _comm.ForceCoil(6, true);
+                        _comm.ForceCoil(0, false);
+                    });
+                    await Task.Delay(1000);
+                    await Task.Run(() => _comm.ForceCoil(6, false));
+
+                    // 5. 移到排料點
+                    if (dischargePoint == 5)
+                    {
+                        // 排料至 X5
+                        AppendLog("INFO", "步驟 [4/5]: 目標排料點為 X5，Y7 (B-放) ON 1秒...");
+                        await Task.Run(() => _comm.ForceCoil(7, true));
+                        await Task.Delay(1000);
+                        await Task.Run(() => _comm.ForceCoil(7, false));
+
+                        AppendLog("INFO", "步驟 [5/5]: Y5 (M2-右移) ON 直到 X2 ON...");
+                        await Task.Run(() => {
+                            _comm.ForceCoil(5, true);
+                            _comm.ForceCoil(8, false); // Y10 off
+                        });
+                        if (!await WaitForInputStateAsync(2, true, 15))
+                        {
+                            throw new Exception("等待 X2 ON 逾時！");
+                        }
+                        await Task.Run(() => _comm.ForceCoil(5, false));
+                    }
+                    else
+                    {
+                        // 排料至 X6
+                        AppendLog("INFO", "步驟 [4/5]: 目標排料點為 X6，Y0 ON...");
+                        await Task.Run(() => _comm.ForceCoil(0, true));
+                        if (!await WaitForInputStateAsync(0, true, 15))
+                        {
+                            throw new Exception("等待 X0 ON 逾時！");
+                        }
+                        AppendLog("INFO", "X0 ON，延遲 0.5 秒開啟 Y7...”");
+                        await Task.Delay(500);
+                        AppendLog("INFO", "Y7 (B-放) ON 保持 1 秒，並關閉 Y0...");
+                        await Task.Run(() => {
+                            _comm.ForceCoil(7, true);
+                            _comm.ForceCoil(0, false);
+                        });
+                        await Task.Delay(1000);
+                        await Task.Run(() => _comm.ForceCoil(7, false));
+
+                        AppendLog("INFO", "步驟 [5/5]: 等待 A缸頂起 X1 ON...");
+                        if (!await WaitForInputStateAsync(1, true, 15))
+                        {
+                            throw new Exception("等待 X1 ON 逾時！");
+                        }
+                        AppendLog("INFO", "Y5 ON 直到 X2 ON...");
+                        await Task.Run(() => {
+                            _comm.ForceCoil(5, true);
+                            _comm.ForceCoil(8, false);
+                        });
+                        if (!await WaitForInputStateAsync(2, true, 15))
+                        {
+                            throw new Exception("等待 X2 ON 逾時！");
+                        }
+                        await Task.Run(() => _comm.ForceCoil(5, false));
+                    }
+
+                    AppendLog("INFO", "排料完成。");
+
+                    if (!isContinuous)
+                    {
+                        // 單一作業：結束並復歸待機
+                        await Task.Run(() => {
+                            _comm.ForceCoil(13, false); // Y15 off
+                            _comm.ForceCoil(14, true);  // Y16 on
+                        });
+                        MessageBox.Show("單一作業已成功執行完畢！", "作業成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        break;
+                    }
+                    else
+                    {
+                        AppendLog("INFO", "連續作業：等待 1 秒後開始下一輪流程...");
+                        await Task.Delay(1000);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog("ERROR", $"第 1 題作業中斷: {ex.Message}");
+                MessageBox.Show($"作業執行失敗：\n{ex.Message}", "作業中斷", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                await RunSafeShutdownAsync();
+            }
+            finally
+            {
+                SetControlsEnabled(true);
+            }
+        }
+
+        // Q1 指定作業 (指定翻轉)
+        private async Task RunFlipOnlyQ1Async()
+        {
+            bool isY16On = _yLeds[14].Tag != null && (bool)_yLeds[14].Tag;
+            if (!isY16On)
+            {
+                MessageBox.Show("無法執行指定作業！\n前提條件：必須在待機 (Y16 ON) 狀態下才能執行！", "前提條件不符", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (_comm == null || !_comm.IsOpen)
+            {
+                MessageBox.Show("請先連線 PLC 才能執行指定作業！", "未連線", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            SetControlsEnabled(false);
+            AppendLog("INFO", "=== 開始執行第 1 題指定作業 ===");
+            try
+            {
+                await Task.Run(() => {
+                    _comm.ForceCoil(14, false);
+                    _comm.ForceCoil(13, true);
+                });
+
+                bool[] xStates = await Task.Run(() => _comm.ReadDeviceStates(true));
+
+                bool y2 = xStates[7];
+                bool y0 = xStates[10] && xStates[2];
+                bool y4 = xStates[11] && !xStates[6];
+                bool y5 = xStates[12] && !xStates[2];
+
+                AppendLog("INFO", $"指定邏輯判定下發：Y2={y2}, Y0={y0}, Y4={y4}, Y5={y5}");
+
+                await Task.Run(() => {
+                    _comm.ForceCoil(2, y2);
+                    _comm.ForceCoil(0, y0);
+                    _comm.ForceCoil(4, y4);
+                    _comm.ForceCoil(5, y5);
+                });
+
+                await Task.Delay(1000); // 運轉維持1秒
+
+                // 清除所有輸出回到待機
+                await Task.Run(() => {
+                    _comm.ForceCoil(2, false);
+                    _comm.ForceCoil(0, false);
+                    _comm.ForceCoil(4, false);
+                    _comm.ForceCoil(5, false);
+                    _comm.ForceCoil(13, false);
+                    _comm.ForceCoil(14, true);
+                });
+
+                AppendLog("INFO", "=== 第 1 題指定作業成功執行完畢 ===");
+                MessageBox.Show("指定作業已成功執行完畢！", "指定作業成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                AppendLog("ERROR", $"指定作業失敗: {ex.Message}");
+                MessageBox.Show($"指定作業執行失敗：\n{ex.Message}", "作業中斷", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                await RunSafeShutdownAsync();
+            }
+            finally
+            {
+                SetControlsEnabled(true);
+            }
+        }
+
+        private async Task RunSafeShutdownAsync()
+        {
+            try
+            {
+                await Task.Run(() =>
+                {
+                    for (int i = 0; i <= 8; i++) _comm.ForceCoil(i, false);
+                    if (cmbQuestions.SelectedIndex == 1)
+                    {
+                        _comm.ForceCoil(13, false);
+                        _comm.ForceCoil(14, true); // Q1 待機黃
+                    }
+                    else if (cmbQuestions.SelectedIndex == 2)
+                    {
+                        _comm.ForceCoil(13, false);
+                        _comm.ForceCoil(15, true); // Q2 待機綠
+                    }
+                });
+            }
+            catch { }
+            ResetLeds();
+        }
+
+        private void SetControlsEnabled(bool enabled)
+        {
+            btnRunSequence.Enabled = enabled && _isConnectionNormal;
+            btnStartFlow.Enabled = enabled && _isConnectionNormal;
+            txtSequence.Enabled = enabled;
+
+            if (enabled && _comm != null && _comm.IsOpen && _isConnectionNormal)
+            {
+                bool isQ1OrQ2 = (cmbQuestions.SelectedIndex == 1 || cmbQuestions.SelectedIndex == 2);
+                btnStandby.Enabled = isQ1OrQ2;
+                btnSingleJob.Enabled = isQ1OrQ2;
+                btnFlipOnly.Enabled = isQ1OrQ2;
+                btnContinuousJob.Enabled = isQ1OrQ2;
+            }
+            else
+            {
+                btnStandby.Enabled = false;
+                btnSingleJob.Enabled = false;
+                btnFlipOnly.Enabled = false;
+                btnContinuousJob.Enabled = false;
+            }
+        }
+
+        private void UpdateButtonsVisualState(bool isNormal)
+        {
+            if (isNormal)
+            {
+                btnStartFlow.BackColor = _colorStartFlowBack;
+                btnStartFlow.ForeColor = Color.White;
+                
+                btnRunSequence.BackColor = _colorRunSequenceBack;
+                btnRunSequence.ForeColor = Color.White;
+                
+                btnStandby.BackColor = _colorStandbyBack;
+                btnStandby.ForeColor = Color.White;
+                
+                btnSingleJob.BackColor = _colorSingleJobBack;
+                btnSingleJob.ForeColor = Color.White;
+                
+                btnFlipOnly.BackColor = _colorFlipOnlyBack;
+                btnFlipOnly.ForeColor = Color.White;
+                
+                btnContinuousJob.BackColor = _colorContinuousJobBack;
+                btnContinuousJob.ForeColor = Color.White;
+            }
+            else
+            {
+                Color grayBg = Color.FromArgb(142, 142, 147);
+                Color blackText = Color.Black;
+                
+                btnStartFlow.BackColor = grayBg;
+                btnStartFlow.ForeColor = blackText;
+                
+                btnRunSequence.BackColor = grayBg;
+                btnRunSequence.ForeColor = blackText;
+                
+                btnStandby.BackColor = grayBg;
+                btnStandby.ForeColor = blackText;
+                
+                btnSingleJob.BackColor = grayBg;
+                btnSingleJob.ForeColor = blackText;
+                
+                btnFlipOnly.BackColor = grayBg;
+                btnFlipOnly.ForeColor = blackText;
+                
+                btnContinuousJob.BackColor = grayBg;
+                btnContinuousJob.ForeColor = blackText;
+            }
+        }
+
+        private void chkShowLog_CheckedChanged(object sender, EventArgs e)
+        {
+            panelBottom.Visible = chkShowLog.Checked;
+            if (chkShowLog.Checked)
+            {
+                this.MinimumSize = new System.Drawing.Size(1024, 670);
+                this.Height = 670;
+            }
+            else
+            {
+                this.MinimumSize = new System.Drawing.Size(1024, 470);
+                this.Height = 470;
             }
         }
     }

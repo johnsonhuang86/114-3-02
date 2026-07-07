@@ -94,11 +94,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "D:\\0706-FX3U\\fx3u.csproj",
+      "projectUniqueName": "d:\\0707-FX3U\\fx3u.csproj",
       "projectName": "fx3u",
-      "projectPath": "D:\\0706-FX3U\\fx3u.csproj",
+      "projectPath": "d:\\0707-FX3U\\fx3u.csproj",
       "packagesPath": "C:\\Users\\User\\.nuget\\packages\\",
-      "outputPath": "D:\\0706-FX3U\\obj\\",
+      "outputPath": "d:\\0707-FX3U\\obj\\",
       "projectStyle": "PackageReference",
       "fallbackFolders": [
         "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"

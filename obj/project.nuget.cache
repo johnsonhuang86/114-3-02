@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "E1QLS0AXv7c=",
+  "dgSpecHash": "+uP6MMk1S4g=",
   "success": true,
-  "projectFilePath": "D:\\0706-FX3U\\fx3u.csproj",
+  "projectFilePath": "d:\\0707-FX3U\\fx3u.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\User\\.nuget\\packages\\system.io.ports\\8.0.0\\system.io.ports.8.0.0.nupkg.sha512"
   ],

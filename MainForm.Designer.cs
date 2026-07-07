@@ -56,6 +56,7 @@ namespace fx3u
             this.btnFlipOnly = new System.Windows.Forms.Button();
             this.btnContinuousJob = new System.Windows.Forms.Button();
             this.panelIndicators = new System.Windows.Forms.Panel();
+            this.chkShowLog = new System.Windows.Forms.CheckBox();
             this.panelMain = new System.Windows.Forms.Panel();
             this.splitContainer = new System.Windows.Forms.SplitContainer();
             this.grpX = new System.Windows.Forms.GroupBox();
@@ -123,6 +124,7 @@ namespace fx3u
             this.flowHeaderTop.Controls.Add(this.cmbQuestions);
             this.flowHeaderTop.Controls.Add(this.btnConnect);
             this.flowHeaderTop.Controls.Add(this.btnDisconnect);
+            this.flowHeaderTop.Controls.Add(this.chkShowLog);
             this.flowHeaderTop.Dock = System.Windows.Forms.DockStyle.Fill;
             this.flowHeaderTop.FlowDirection = System.Windows.Forms.FlowDirection.LeftToRight;
             this.flowHeaderTop.Location = new System.Drawing.Point(0, 0);
@@ -246,6 +248,20 @@ namespace fx3u
             this.btnDisconnect.Text = "中斷連線";
             this.btnDisconnect.UseVisualStyleBackColor = false;
             this.btnDisconnect.Click += new System.EventHandler(this.btnDisconnect_Click);
+            // 
+            // chkShowLog
+            // 
+            this.chkShowLog.AutoSize = true;
+            this.chkShowLog.ForeColor = System.Drawing.Color.White;
+            this.chkShowLog.Font = new System.Drawing.Font("Microsoft JhengHei UI", 9F, System.Drawing.FontStyle.Bold);
+            this.chkShowLog.Margin = new System.Windows.Forms.Padding(15, 2, 0, 0);
+            this.chkShowLog.Name = "chkShowLog";
+            this.chkShowLog.Size = new System.Drawing.Size(120, 19);
+            this.chkShowLog.TabIndex = 12;
+            this.chkShowLog.Text = "顯示通訊日誌";
+            this.chkShowLog.UseVisualStyleBackColor = true;
+            this.chkShowLog.Checked = false;
+            this.chkShowLog.CheckedChanged += new System.EventHandler(this.chkShowLog_CheckedChanged);
             // 
             // lblFlowControl
             // 
@@ -380,7 +396,7 @@ namespace fx3u
             this.btnRunSequence.Name = "btnRunSequence";
             this.btnRunSequence.Size = new System.Drawing.Size(80, 26);
             this.btnRunSequence.TabIndex = 15;
-            this.btnRunSequence.Text = "啟動序列";
+            this.btnRunSequence.Text = "啟動";
             this.btnRunSequence.UseVisualStyleBackColor = false;
             this.btnRunSequence.Click += new System.EventHandler(this.btnRunSequence_Click);
             // 
@@ -479,7 +495,7 @@ namespace fx3u
             // splitContainer.Panel2
             // 
             this.splitContainer.Panel2.Controls.Add(this.grpY);
-            this.splitContainer.Size = new System.Drawing.Size(988, 330);
+            this.splitContainer.Size = new System.Drawing.Size(988, 310);
             this.splitContainer.SplitterDistance = 450;
             this.splitContainer.TabIndex = 0;
             // 
@@ -492,7 +508,7 @@ namespace fx3u
             this.grpX.Location = new System.Drawing.Point(0, 0);
             this.grpX.Name = "grpX";
             this.grpX.Padding = new System.Windows.Forms.Padding(10);
-            this.grpX.Size = new System.Drawing.Size(450, 330);
+            this.grpX.Size = new System.Drawing.Size(450, 310);
             this.grpX.TabIndex = 0;
             this.grpX.TabStop = false;
             this.grpX.Text = "INPUT 狀態監控 (X0~X7, X10~X17)";
@@ -514,7 +530,7 @@ namespace fx3u
             this.tblX.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 12.5F));
             this.tblX.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 12.5F));
             this.tblX.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 12.5F));
-            this.tblX.Size = new System.Drawing.Size(430, 293);
+            this.tblX.Size = new System.Drawing.Size(430, 273);
             this.tblX.TabIndex = 0;
             // 
             // grpY
@@ -526,7 +542,7 @@ namespace fx3u
             this.grpY.Location = new System.Drawing.Point(0, 0);
             this.grpY.Name = "grpY";
             this.grpY.Padding = new System.Windows.Forms.Padding(10);
-            this.grpY.Size = new System.Drawing.Size(534, 330);
+            this.grpY.Size = new System.Drawing.Size(534, 310);
             this.grpY.TabIndex = 0;
             this.grpY.TabStop = false;
             this.grpY.Text = "OUTPUT 控制與監控 (Y0~Y7, Y10~Y17)";
@@ -548,7 +564,7 @@ namespace fx3u
             this.tblY.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 12.5F));
             this.tblY.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 12.5F));
             this.tblY.RowStyles.Add(new System.Windows.Forms.RowStyle(System.Windows.Forms.SizeType.Percent, 12.5F));
-            this.tblY.Size = new System.Drawing.Size(514, 293);
+            this.tblY.Size = new System.Drawing.Size(514, 273);
             this.tblY.TabIndex = 0;
             // 
             // panelBottom
@@ -560,6 +576,7 @@ namespace fx3u
             this.panelBottom.Padding = new System.Windows.Forms.Padding(10, 0, 10, 10);
             this.panelBottom.Size = new System.Drawing.Size(1008, 200);
             this.panelBottom.TabIndex = 2;
+            this.panelBottom.Visible = false;
             // 
             // grpLog
             // 
@@ -668,14 +685,14 @@ namespace fx3u
             this.AutoScaleDimensions = new System.Drawing.SizeF(8F, 15F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(28)))), ((int)(((byte)(28)))), ((int)(((byte)(30)))));
-            this.ClientSize = new System.Drawing.Size(1008, 632);
+            this.ClientSize = new System.Drawing.Size(1008, 432);
             this.Controls.Add(this.panelMain);
             this.Controls.Add(this.panelBottom);
             this.Controls.Add(this.panelHeader);
             this.Controls.Add(this.statusStrip);
             this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.Sizable;
             this.MaximizeBox = true;
-            this.MinimumSize = new System.Drawing.Size(1024, 670);
+            this.MinimumSize = new System.Drawing.Size(1024, 470);
             this.Name = "MainForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "三菱 PLC FX3U 序列通訊監控系統 (Windows Forms App)";
@@ -748,5 +765,6 @@ namespace fx3u
         private System.Windows.Forms.Button btnFlipOnly;
         private System.Windows.Forms.Button btnContinuousJob;
         private System.Windows.Forms.Panel panelIndicators;
+        private System.Windows.Forms.CheckBox chkShowLog;
     }
 }
